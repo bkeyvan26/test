@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-"""K1 VMS — Playback page (mtime-based durations, accurate gap detection)"""
-import os
+"""K1 VMS — Playback page (Phase C: seek debounce + gap handling)"""
 import datetime
 from pathlib import Path
 
@@ -24,6 +23,7 @@ from ui.widgets.persian_calendar import (
 from core.camera_manager import CameraManager
 from core.playback_engine import PlaybackEngine
 from core.nvr_engine import _camera_path_name
+from core.recording_indexer import RecordingIndexer, STATE_WRITING
 from core import settings_manager
 import config
 
@@ -43,6 +43,7 @@ class PlaybackPage(BasePage):
         self.cam_manager = CameraManager()
         self.nvr = nvr_engine
         self._current_cam_uid = None
+        self.indexer = RecordingIndexer.instance(nvr_engine)
 
         self._cut_in = None
         self._cut_out = None
@@ -204,6 +205,7 @@ class PlaybackPage(BasePage):
         self.video.zoom_changed.connect(self._on_video_zoom_changed)
         v.addWidget(self.video, 1)
 
+        # --- Toolbar ---
         toolbar = QFrame()
         toolbar.setFixedHeight(42)
         toolbar.setStyleSheet(f"""
@@ -445,6 +447,9 @@ class PlaybackPage(BasePage):
         v.addWidget(self.timeline)
         return wrap
 
+    # ============================================================
+    # Helpers
+    # ============================================================
     def _nav_qss(self):
         return f"""
             QPushButton {{
@@ -501,101 +506,62 @@ class PlaybackPage(BasePage):
         self.cam_list.blockSignals(False)
 
     # ============================================================
-    # Scanning — mtime-based (accurate durations)
+    # Scanning
     # ============================================================
     def _scan_recording_dates(self, cam_uid):
         cam = self.cam_manager.get(cam_uid)
         if cam is None:
             return set()
-        root = (self.nvr.get_recording_root() if self.nvr
-                else str(config.CONTINUOUS_DIR))
-        cam_dir = Path(root) / _camera_path_name(cam)
-        if not cam_dir.exists():
-            return set()
-        dates = set()
+        name = _camera_path_name(cam)
         try:
-            for d in cam_dir.iterdir():
-                if not d.is_dir():
-                    continue
-                try:
-                    dates.add(datetime.datetime.strptime(d.name, "%Y-%m-%d").date())
-                except ValueError:
-                    continue
-        except Exception:
-            pass
-        return dates
+            return self.indexer.get_recording_dates(name)
+        except Exception as e:
+            print(f"[playback] dates scan error: {e}")
+            return set()
 
     def _scan_segments(self, cam_uid, day):
-        """Use file mtime to compute EXACT duration of each segment.
-
-        MediaMTX writes to a .ts file until the segment ends (either at
-        segment_minutes, or earlier if the camera disconnected). The file's
-        mtime = the last write time = the actual end of recording for that
-        segment.
-
-        So:  duration = mtime - filename_start_time
-
-        This is exact and independent of bitrate.
-        """
+        """Use RecordingIndexer for accurate, cached segment discovery."""
         cam = self.cam_manager.get(cam_uid)
         if cam is None:
             return []
+        name = _camera_path_name(cam)
 
-        root = (self.nvr.get_recording_root() if self.nvr
-                else str(config.CONTINUOUS_DIR))
-        cam_dir = Path(root) / _camera_path_name(cam) / day.strftime("%Y-%m-%d")
-        if not cam_dir.exists():
+        try:
+            day_index = self.indexer.get_day_index(name, day)
+        except Exception as e:
+            print(f"[playback] segment scan error: {e}")
             return []
 
-        # Settings fallback for clamping
-        try:
-            settings = settings_manager.load_settings()
-            seg_min = int(settings.record_segment_minutes or 5)
-            seg_min = max(1, min(30, seg_min))
-        except Exception:
-            seg_min = 5
-        full_dur = float(seg_min * 60)
-        max_dur = full_dur * 1.2   # allow 20% over for boundary jitter
+        now = datetime.datetime.now()
+        now_sec = now.hour * 3600 + now.minute * 60 + now.second
 
-        segments = []
-        for f in sorted(cam_dir.glob("*.ts")):
-            try:
-                parts = f.stem.split("-")
-                if len(parts) < 3:
-                    continue
-                hh, mm, ss = int(parts[0]), int(parts[1]), int(parts[2])
-                start_sec = hh * 3600 + mm * 60 + ss
+        out = []
+        for seg in day_index.segments:
+            dur = seg.duration
 
-                try:
-                    mtime = os.path.getmtime(str(f))
-                except Exception:
-                    mtime = None
-
-                if mtime is None:
-                    dur = full_dur
+            # WRITING segments: growing bar up to current time
+            if seg.state == STATE_WRITING:
+                if seg.start_sec <= now_sec:
+                    dur = float(now_sec - seg.start_sec)
                 else:
-                    mt_dt = datetime.datetime.fromtimestamp(mtime)
-                    mt_sec = mt_dt.hour * 3600 + mt_dt.minute * 60 + mt_dt.second
-                    dur = mt_sec - start_sec
-                    # Midnight crossing
-                    if dur < 0:
-                        dur += 86400
-                    # Sane clamps
-                    if dur < 1.0:
-                        dur = 1.0
-                    if dur > max_dur:
-                        dur = full_dur
+                    dur = float(86400 - seg.start_sec + now_sec)
 
-                segments.append({
-                    "path": str(f),
-                    "start": float(start_sec),
-                    "duration": float(dur),
-                    "type": "continuous",
-                })
-            except Exception:
+            if dur is None or dur <= 0:
                 continue
 
-        return segments
+            out.append({
+                "path": seg.file_path,
+                "start": float(seg.start_sec),
+                "duration": float(dur),
+                "type": "continuous",
+                "state": seg.state,
+                "codec": seg.codec,
+                "width": seg.width,
+                "height": seg.height,
+                "fps": seg.fps,
+            })
+
+        return out
 
     # ============================================================
     # Selection
@@ -690,9 +656,13 @@ class PlaybackPage(BasePage):
         self.engine.set_speed(s)
 
     def _on_seek(self, seconds):
-        self.engine.seek(seconds)
+        """Called continuously during timeline drag → debounced."""
+        self.engine.request_seek(seconds)
 
     def _on_frame(self, rgb):
+        if rgb is None:
+            self.video.set_placeholder("— NO RECORDING —")
+            return
         self.video.set_frame(rgb)
 
     def _on_position(self, seconds):
@@ -706,6 +676,15 @@ class PlaybackPage(BasePage):
     def _on_state(self, state):
         if state == "playing":
             self.btn_play.setIcon(make_icon("pause", "white", 20))
+            # در حال پخش: اگر placeholder قبلی بود، پاک شود
+            if getattr(self.video, "_image", None) is None:
+                self.video.set_placeholder("Loading…")
+        elif state == "gap":
+            self.btn_play.setIcon(make_icon("play-circle", "white", 20))
+            self.video.set_placeholder("— NO RECORDING —")
+        elif state == "ended":
+            self.btn_play.setIcon(make_icon("play-circle", "white", 20))
+            self.video.set_placeholder("— END OF RECORDING —")
         else:
             self.btn_play.setIcon(make_icon("play-circle", "white", 20))
 
@@ -916,7 +895,13 @@ class PlaybackPage(BasePage):
             dur = int(seg["duration"])
             dm = dur // 60
             ds = dur % 60
-            text = f"🎬  {hh:02d}:{mm:02d}:{ss:02d}   ({dm}:{ds:02d})"
+
+            state = seg.get("state", "")
+            if state == STATE_WRITING:
+                text = f"🔴  {hh:02d}:{mm:02d}:{ss:02d}   (live)"
+            else:
+                text = f"🎬  {hh:02d}:{mm:02d}:{ss:02d}   ({dm}:{ds:02d})"
+
             it = QListWidgetItem(text)
             it.setData(Qt.UserRole, seg["start"])
             self._panel_list.addItem(it)

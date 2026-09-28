@@ -4,6 +4,11 @@
 معماری:
     K1 VMS UI → NVREngine → MediaMTXProcess (detached) → RTSP → Disk
     مسیر Recording کاملاً مستقل از UI است.
+
+Phase 3: Stream Profiles
+    - Recording از recording_profile_id استفاده می‌کند (Main stream معمولاً)
+    - Motion Detector از motion_profile_id استفاده می‌کند (Sub stream معمولاً)
+    - Legacy rtsp_path_main/sub همچنان پشتیبانی می‌شود
 """
 import os, sys, re, json, time, socket, subprocess, threading, urllib.request
 from pathlib import Path
@@ -14,7 +19,6 @@ import config
 
 IS_WIN = sys.platform.startswith("win")
 
-# Windows creation flags
 DETACHED_PROCESS           = 0x00000008
 CREATE_NEW_PROCESS_GROUP   = 0x00000200
 CREATE_BREAKAWAY_FROM_JOB  = 0x01000000
@@ -27,7 +31,6 @@ MEDIAMTX_PID_FILE = config.APP_DIR / "mediamtx.pid"
 # Helpers
 # ============================================================
 def _spawn_detached_kwargs():
-    """Flags for a fully detached child process (survives parent death)."""
     if IS_WIN:
         flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
         return {"creationflags": flags}
@@ -52,7 +55,6 @@ def _port_in_use(port: int, host: str = "127.0.0.1", timeout: float = 0.4) -> bo
 
 
 def _camera_path_name(cam: CameraConfig) -> str:
-    """Sanitized name used as MediaMTX path name and %path value."""
     raw = cam.name or ""
     safe = re.sub(r"[^A-Za-z0-9_\-]", "_", raw)[:32].strip("_")
     if len(safe) < 2:
@@ -61,6 +63,7 @@ def _camera_path_name(cam: CameraConfig) -> str:
 
 
 def _build_rtsp_url(cam: CameraConfig, use_sub: bool = False) -> str:
+    """Legacy fallback — builds URL from rtsp_path_main/sub fields."""
     import urllib.parse
     path = (cam.rtsp_path_sub if use_sub and cam.rtsp_path_sub
             else cam.rtsp_path_main) or "/"
@@ -73,12 +76,36 @@ def _build_rtsp_url(cam: CameraConfig, use_sub: bool = False) -> str:
     return f"rtsp://{u}:{pw}@{cam.ip}:{cam.port}{path}"
 
 
+def _pick_recording_url(cam: CameraConfig) -> str:
+    """
+    Prefer recording profile URL; fall back to legacy rtsp_path_main.
+    """
+    try:
+        url = cam.get_recording_url()
+        if url:
+            return url
+    except Exception:
+        pass
+    return _build_rtsp_url(cam, use_sub=False)
+
+
+def _pick_motion_url(cam: CameraConfig) -> str:
+    """
+    Prefer motion profile URL; fall back to sub, then main.
+    """
+    try:
+        url = cam.get_motion_url()
+        if url:
+            return url
+    except Exception:
+        pass
+    return _build_rtsp_url(cam, use_sub=bool(cam.rtsp_path_sub))
+
+
 # ============================================================
 # MediaMTX Config Builder
 # ============================================================
 class MediaMTXConfigBuilder:
-    """Generates mediamtx.yml from cameras + settings."""
-
     def __init__(self, cameras: List[CameraConfig], settings: GlobalSettings):
         self.cameras = cameras
         self.settings = settings
@@ -131,20 +158,31 @@ class MediaMTXConfigBuilder:
             self.settings.record_enabled
             and (cam.record_enabled_continuous or cam.record_enabled_motion)
         )
+
+        # Determine which profile is used for recording
+        rec_profile = cam.get_recording_profile() if hasattr(cam, "get_recording_profile") else None
+        rec_profile_name = rec_profile.name if rec_profile else "legacy(main)"
+
+        print(f"[NVR] {pname}: record={rec_enabled} "
+              f"(cont={cam.record_enabled_continuous}, "
+              f"motion={cam.record_enabled_motion}, "
+              f"global={self.settings.record_enabled}) "
+              f"rec_profile={rec_profile_name}")
+
         rec_root = (
             cam.record_path_override
             or self.settings.recording_root
             or str(config.CONTINUOUS_DIR)
         )
-        # MediaMTX v1.x requires %path placeholder
         rec_pattern = str(Path(rec_root) / "%path" / "%Y-%m-%d" / "%H-%M-%S")
         seg_min = cam.record_segment_minutes or self.settings.record_segment_minutes
         seg_min = max(1, min(30, int(seg_min)))
         retention_h = max(1, int(self.settings.retention_days)) * 24
 
+        # ★ Main URL from recording profile (or legacy fallback)
+        main_url = _pick_recording_url(cam)
+
         lines = []
-        # Main stream — recorded
-        main_url = _build_rtsp_url(cam, use_sub=False)
         lines.append(f"  {pname}:")
         lines.append(f'    source: "{main_url}"')
         lines.append("    sourceOnDemand: no")
@@ -158,14 +196,13 @@ class MediaMTXConfigBuilder:
             lines.append("    record: no")
         lines.append("")
 
-        # Sub stream — live only
-        if cam.rtsp_path_sub:
-            sub_url = _build_rtsp_url(cam, use_sub=True)
-            if sub_url != main_url:
-                lines.append(f"  {pname}_sub:")
-                lines.append(f'    source: "{sub_url}"')
-                lines.append("    sourceOnDemand: no")
-                lines.append("")
+        # ★ Sub-stream from motion profile (for Motion Detector Phase 4)
+        sub_url = _pick_motion_url(cam)
+        if sub_url and sub_url != main_url:
+            lines.append(f"  {pname}_sub:")
+            lines.append(f'    source: "{sub_url}"')
+            lines.append("    sourceOnDemand: no")
+            lines.append("")
 
         return lines
 
@@ -184,8 +221,8 @@ class MediaMTXApi:
         except Exception:
             return None
 
-    def is_healthy(self) -> bool:
-        return self._get("/v3/config/global/get") is not None
+    def is_healthy(self, timeout: float = 2.0) -> bool:
+        return self._get("/v3/config/global/get", timeout=timeout) is not None
 
     def list_paths(self) -> Dict[str, dict]:
         data = self._get("/v3/paths/list")
@@ -225,9 +262,8 @@ class MediaMTXProcess:
 
     # ---------- detection ----------
     def detect_existing(self) -> bool:
-        """Detect a running MediaMTX from a previous session."""
         api = MediaMTXApi()
-        if api.is_healthy():
+        if api.is_healthy(timeout=0.5):
             self._external = True
             if self.pid_file.exists():
                 try:
@@ -276,13 +312,17 @@ class MediaMTXProcess:
                 pass
 
     # ---------- lifecycle ----------
-    def start(self) -> bool:
+    def start(self, force: bool = False) -> bool:
+        """
+        force=True → ignore existing instance (used by reload()).
+        """
         if self._proc is not None and self._proc.poll() is None:
             return True
-        if self._external and MediaMTXApi().is_healthy():
-            return True
-        if self.detect_existing():
-            return True
+        if not force:
+            if self._external and MediaMTXApi().is_healthy(timeout=0.5):
+                return True
+            if self.detect_existing():
+                return True
 
         if not Path(self.exe).exists():
             raise FileNotFoundError(f"MediaMTX not found at {self.exe}")
@@ -325,18 +365,22 @@ class MediaMTXProcess:
                 return True
         return False
 
-    def stop(self):
-        if self._external:
-            if self._pid and self._pid_alive(self._pid):
-                self._kill_pid(self._pid)
-        else:
-            if self._pid and self._pid_alive(self._pid):
-                self._kill_pid(self._pid)
-            elif self._proc is not None:
-                try:
-                    self._proc.terminate()
-                except Exception:
-                    pass
+    def stop(self, wait_for_death: bool = True):
+        if self._pid and self._pid_alive(self._pid):
+            self._kill_pid(self._pid)
+        elif self._proc is not None and self._proc.poll() is None:
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
+
+        if wait_for_death:
+            api = MediaMTXApi()
+            for _ in range(50):
+                if not api.is_healthy(timeout=0.3):
+                    break
+                time.sleep(0.1)
+
         try:
             self.pid_file.unlink()
         except Exception:
@@ -346,15 +390,13 @@ class MediaMTXProcess:
         self._external = False
 
     def is_running(self) -> bool:
-        return MediaMTXApi().is_healthy()
+        return MediaMTXApi().is_healthy(timeout=0.5)
 
 
 # ============================================================
 # NVR Engine — top-level orchestrator
 # ============================================================
 class NVREngine:
-    """Orchestrator: manage config, process, health, camera status."""
-
     def __init__(self):
         self._cameras: List[CameraConfig] = []
         self._settings: Optional[GlobalSettings] = None
@@ -384,7 +426,7 @@ class NVREngine:
                 pid_file=MEDIAMTX_PID_FILE,
             )
             try:
-                ok = self._process.start()
+                ok = self._process.start(force=False)
             except Exception as e:
                 self._last_error = str(e)
                 self._started = False
@@ -398,22 +440,33 @@ class NVREngine:
     def stop(self):
         with self._lock:
             if self._process:
-                self._process.stop()
+                self._process.stop(wait_for_death=False)
             self._process = None
             self._started = False
 
     def reload(self, cameras: Optional[List[CameraConfig]] = None,
                settings: Optional[GlobalSettings] = None) -> bool:
+        print("[NVR] reload requested…")
+
         if cameras is not None:
             self._cameras = list(cameras)
         if settings is not None:
             self._settings = settings
         if self._settings is None:
+            print("[NVR] reload aborted: no settings")
             return False
+
+        # 1) Rebuild config
         self._builder = MediaMTXConfigBuilder(self._cameras, self._settings)
         self._builder.build(config.MEDIAMTX_YML)
+        print(f"[NVR] config written → {config.MEDIAMTX_YML}")
+
+        # 2) Stop old process (waits for API death)
         if self._process:
-            self._process.stop()
+            print("[NVR] stopping old MediaMTX…")
+            self._process.stop(wait_for_death=True)
+
+        # 3) Start new process (force=True → ignore any lingering API)
         self._process = MediaMTXProcess(
             exe=config.MEDIAMTX_EXE,
             cfg=config.MEDIAMTX_YML,
@@ -421,15 +474,19 @@ class NVREngine:
             pid_file=MEDIAMTX_PID_FILE,
         )
         try:
-            self._started = bool(self._process.start())
+            self._started = bool(self._process.start(force=True))
         except Exception as e:
             self._last_error = str(e)
             self._started = False
+            print(f"[NVR] reload failed: {e}")
+            return False
+
+        print(f"[NVR] reload result: {self._started}")
         return self._started
 
     # ---------- status ----------
     def is_running(self) -> bool:
-        return self._api.is_healthy()
+        return self._api.is_healthy(timeout=0.5)
 
     def is_started(self) -> bool:
         return self._started
@@ -439,7 +496,6 @@ class NVREngine:
 
     # ---------- poll status ----------
     def poll_status(self):
-        """Fetch status from MediaMTX API (throttled to 3 sec min)."""
         now = time.time()
         if now - self._last_poll < 3.0:
             return
@@ -476,7 +532,6 @@ class NVREngine:
                 "last_error": last_err,
             }
 
-        # Only notify if summary changed
         old_summary = {uid: info.get("status") for uid, info in self._status_cache.items()}
         new_summary = {uid: info.get("status") for uid, info in new_cache.items()}
         self._status_cache = new_cache

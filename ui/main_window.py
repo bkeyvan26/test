@@ -1,5 +1,5 @@
- # -*- coding: utf-8 -*-
-"""K1 VMS — Main Window (Phase 2: NVR integrated)"""
+# -*- coding: utf-8 -*-
+"""K1 VMS — Main Window (Phase 3: Live View integrated, safe shutdown)"""
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QStackedWidget,
     QFrame, QLabel, QMessageBox, QApplication, QLineEdit, QTextEdit,
@@ -17,8 +17,9 @@ from ui.command_bar import CommandBar
 from ui.pages.dashboard_page import DashboardPage
 from ui.pages.cameras_page import CamerasPage
 from ui.pages.playback_page import PlaybackPage
+from ui.pages.live_page import LivePage
 from ui.pages.placeholders import (
-    LivePage, AlarmsPage, AIPage, SearchPage,
+    AlarmsPage, AIPage, SearchPage,
     MapPage, ReportsPage, SettingsPage, UsersPage
 )
 from core.camera_manager import CameraManager
@@ -59,6 +60,7 @@ class MainWindow(QMainWindow):
         self.settings = settings_manager.load_settings()
         self.nvr = NVREngine()
         self._pages = {}
+        self._shutting_down = False
 
         self._setup_ui()
         self._setup_shortcuts()
@@ -115,7 +117,7 @@ class MainWindow(QMainWindow):
         # Register pages
         pages = [
             DashboardPage(),
-            LivePage(),
+            LivePage(nvr_engine=self.nvr),
             CamerasPage(nvr_engine=self.nvr),
             PlaybackPage(nvr_engine=self.nvr),
             AlarmsPage(), AIPage(), SearchPage(), MapPage(),
@@ -156,7 +158,6 @@ class MainWindow(QMainWindow):
             print("[NVR] disabled in settings")
             return
         cameras = self.cam_manager.all()
-        # Only include enabled cameras with connection info
         try:
             ok = self.nvr.start(cameras, self.settings)
             if ok:
@@ -168,13 +169,16 @@ class MainWindow(QMainWindow):
 
     # ============================================================
     def _on_tick(self):
-        """Periodic: NVR status, header, clock."""
-        # Poll NVR
+        if self._shutting_down:
+            return
         try:
             self.nvr.poll_status()
         except Exception as e:
             print(f"[NVR poll] {e}")
-        self._refresh_header()
+        try:
+            self._refresh_header()
+        except Exception as e:
+            print(f"[header refresh] {e}")
 
     def _refresh_header(self):
         cams = self.cam_manager.all()
@@ -200,7 +204,6 @@ class MainWindow(QMainWindow):
         self.clock_lbl.setText(
             datetime.datetime.now().strftime("%Y-%m-%d  %H:%M:%S"))
 
-        # Dashboard update
         if "dashboard" in self._pages:
             self._pages["dashboard"].update_stats(
                 enabled, total, err_count, rec_count, ai_status)
@@ -210,16 +213,31 @@ class MainWindow(QMainWindow):
         if key == "exit":
             self.close(); return
         if key not in self._pages: return
+
         cur = self.workspace.currentWidget()
-        if hasattr(cur, "on_hide"): cur.on_hide()
+        if hasattr(cur, "on_hide"):
+            try:
+                cur.on_hide()
+            except Exception as e:
+                print(f"[page hide] {e}")
+
         page = self._pages[key]
         self.workspace.setCurrentWidget(page)
         self.rail.set_active_page(key)
-        self.panel.show_content(key)
+
+        # Hide/show side panel based on page preference
+        if getattr(page, "HAS_PANEL", True):
+            self.panel.show()
+            self.panel.show_content(key)
+        else:
+            self.panel.hide()
+
         self.status_lbl.setText(page.PAGE_TITLE)
-        # Only call on_show if we're actually entering this page (not re-showing)
         if hasattr(page, "on_show"):
-            page.on_show()
+            try:
+                page.on_show()
+            except Exception as e:
+                print(f"[page show] {e}")
 
     # ============================================================
     def _open_command_bar(self):
@@ -240,12 +258,39 @@ class MainWindow(QMainWindow):
 
     # ============================================================
     # IMPORTANT: Do NOT stop MediaMTX on window close.
-    # Recording must survive UI close (per Phase 2 spec).
+    # DO stop all pages (especially LivePage readers).
     # ============================================================
     def closeEvent(self, event):
-        # Intentionally do NOT call self.nvr.stop().
-        # MediaMTX continues running as a detached process.
+        if self._shutting_down:
+            super().closeEvent(event)
+            return
+        self._shutting_down = True
+
+        print("[shutdown] stopping pages…")
+
+        # Stop timer first
         try:
             self._timer.stop()
-        except Exception: pass
+        except Exception:
+            pass
+
+        # Stop every page.
+        # ★ If page has shutdown() → call it (LivePage stops its readers).
+        #   Otherwise fall back to on_hide() for pages that still need it
+        #   (PlaybackPage pauses the engine here).
+        for key, page in self._pages.items():
+            try:
+                if hasattr(page, "shutdown"):
+                    page.shutdown()
+                elif hasattr(page, "on_hide"):
+                    page.on_hide()
+            except Exception as e:
+                print(f"[shutdown] {key}: {e}")
+
+        # Give threads a moment to exit
+        QApplication.processEvents()
+
+        print("[shutdown] done — MediaMTX left running (detached)")
+
+        # Intentionally do NOT call self.nvr.stop().
         super().closeEvent(event)

@@ -1,15 +1,33 @@
 # -*- coding: utf-8 -*-
-"""K1 VMS — Playback engine (ffmpeg-based, full HEVC support)"""
+"""K1 VMS — Playback engine (Phase C)
+
+Features:
+  • Seek debouncing       — no dozen FFmpeg spawns per second
+  • Gap handling          — "NO RECORDING" state, no stale frames
+  • Segment transitions   — seamless when contiguous, gap-aware when not
+  • Real FPS from metadata (fallback to default)
+  • Proper process lifecycle (no zombie ffmpeg)
+  • Aspect-ratio preservation (letterbox on canvas)
+  • Fast wall-clock pacing for 0.25x – 4x speed
+"""
 import os
+import sys
+import time
 import shutil
 import subprocess
-import time
-import numpy as np
+from dataclasses import dataclass
+from typing import List, Optional, Dict, Any
+
 from PySide6.QtCore import QObject, QTimer, Signal
 
-IS_WIN = os.name == "nt"
+import numpy as np
+
+IS_WIN = sys.platform.startswith("win")
 
 
+# ============================================================
+# Helpers
+# ============================================================
 def _spawn_kwargs():
     if IS_WIN:
         si = subprocess.STARTUPINFO()
@@ -19,75 +37,129 @@ def _spawn_kwargs():
     return {}
 
 
-def _find_ffmpeg():
-    """Locate ffmpeg binary."""
-    # 1) imageio_ffmpeg (bundled pip package)
+def _find_ffmpeg() -> Optional[str]:
     try:
-        import imageio_ffmpeg
-        exe = imageio_ffmpeg.get_ffmpeg_exe()
-        if exe and os.path.isfile(exe):
+        from core.ffprobe_util import get_ffmpeg_exe
+        exe = get_ffmpeg_exe()
+        if exe:
             return exe
     except Exception:
         pass
-    # 2) alongside k1motion.py
     try:
-        from pathlib import Path
-        base = Path(__file__).parent.parent
-        for name in ("ffmpeg.exe", "ffmpeg"):
-            p = base / name
-            if p.exists():
-                return str(p)
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
     except Exception:
         pass
-    # 3) system PATH
     return shutil.which("ffmpeg")
 
 
+# ============================================================
+# Playback Engine
+# ============================================================
 class PlaybackEngine(QObject):
-    """Reads recorded .ts segments via ffmpeg subprocess (HEVC-safe)."""
+    """Reads recorded .ts segments via FFmpeg subprocess (HEVC-safe)."""
 
-    frame_ready      = Signal(object)
-    position_changed = Signal(float)
-    state_changed    = Signal(str)
+    frame_ready      = Signal(object)      # RGB numpy array OR None (gap)
+    position_changed = Signal(float)       # seconds from midnight
+    state_changed    = Signal(str)         # playing|paused|stopped|seeking|gap|ended
     segment_changed  = Signal(int)
 
+    # ---- Timing ----
     TICK_MS          = 15
-    MIN_SPEED        = 0.25
-    MAX_SPEED        = 4.0
-    OUT_W            = 960
-    OUT_H            = 540
-    MAX_READS_PER_TICK = 10
+    SEEK_DEBOUNCE_MS = 120
+
+    # ---- Speed ----
+    MIN_SPEED = 0.25
+    MAX_SPEED = 4.0
+
+    # ---- Output canvas ----
+    OUT_W = 960
+    OUT_H = 540
+
+    # ---- Safety ----
+    MAX_READS_PER_TICK = 12
+    GAP_JUMP_THRESHOLD_SEC = 1.5    # gaps smaller than this are ignored
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._proc = None
-        self._segments = []
-        self._segment_idx = 0
+
+        # Segments
+        self._segments: List[Dict[str, Any]] = []
+        self._segment_idx = -1
+
+        # State
+        self._proc: Optional[subprocess.Popen] = None
+        self._cap_open = False
         self._position = 0.0
         self._speed = 1.0
         self._is_playing = False
-        self._fps = 25.0
+        self._state = "stopped"
+
+        # Timing
         self._wall_start = 0.0
         self._wall_pos_start = 0.0
+        self._fps = 25.0
         self._frame_size = self.OUT_W * self.OUT_H * 3
-        self._ffmpeg = _find_ffmpeg()
+
+        # Last valid frame (for playback during gap skip)
         self._last_frame = None
 
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._tick)
+        # Seek debouncing
+        self._pending_seek: Optional[float] = None
+        self._seek_timer = QTimer(self)
+        self._seek_timer.setSingleShot(True)
+        self._seek_timer.timeout.connect(self._apply_debounced_seek)
 
+        # Playback tick
+        self._tick_timer = QTimer(self)
+        self._tick_timer.timeout.connect(self._tick)
+
+        # Detect ffmpeg
+        self._ffmpeg = _find_ffmpeg()
         if self._ffmpeg:
             print(f"[PlaybackEngine] ffmpeg: {self._ffmpeg}")
         else:
-            print("[PlaybackEngine] ⚠ ffmpeg NOT FOUND")
+            print("[PlaybackEngine] ⚠ ffmpeg not found")
 
     # ============================================================
     # Public API
     # ============================================================
     def set_segments(self, segments):
-        self._segments = sorted(segments or [],
-                                key=lambda s: float(s.get("start", 0)))
-        self._segment_idx = 0
+        """segments: list of dicts with at least {start, duration} or {start, end}."""
+        parsed = []
+        for s in segments or []:
+            try:
+                start = float(s.get("start", 0))
+                if "end" in s and s["end"] is not None:
+                    end = float(s["end"])
+                else:
+                    end = start + float(s.get("duration") or 0)
+                if end <= start:
+                    continue
+
+                # FPS from metadata (fallback chain)
+                fps = None
+                try:
+                    if s.get("fps") and float(s["fps"]) > 1.0:
+                        fps = float(s["fps"])
+                except Exception:
+                    fps = None
+
+                parsed.append({
+                    "path": str(s.get("path", "")),
+                    "start": start,
+                    "end": end,
+                    "duration": end - start,
+                    "fps": fps,
+                    "state": s.get("state", ""),
+                })
+            except Exception:
+                continue
+
+        parsed.sort(key=lambda x: x["start"])
+        self._segments = parsed
+        self._segment_idx = -1
+        self._position = parsed[0]["start"] if parsed else 0.0
 
     def get_segments(self):
         return list(self._segments)
@@ -95,8 +167,7 @@ class PlaybackEngine(QObject):
     def get_total_duration(self):
         if not self._segments:
             return 0.0
-        return max(float(s["start"]) + float(s["duration"])
-                   for s in self._segments)
+        return max(s["end"] for s in self._segments)
 
     def get_position(self):
         return self._position
@@ -110,19 +181,24 @@ class PlaybackEngine(QObject):
     def has_content(self):
         return len(self._segments) > 0
 
+    def get_current_segment(self) -> Optional[Dict[str, Any]]:
+        if 0 <= self._segment_idx < len(self._segments):
+            return self._segments[self._segment_idx]
+        return None
+
     # ============================================================
-    # Control
+    # Play / Pause / Stop
     # ============================================================
     def play(self):
         if not self._segments:
             return
-        if self._proc is None:
-            self._seek_internal(self._position)
+        if self._proc is None and self._state != "gap":
+            self._apply_seek(self._position, force_pause=True)
         self._is_playing = True
+        self._set_state("playing")
         self._wall_start = time.monotonic()
         self._wall_pos_start = self._position
-        self.state_changed.emit("playing")
-        self._timer.start(self.TICK_MS)
+        self._tick_timer.start(self.TICK_MS)
 
     def pause(self):
         if self._is_playing:
@@ -132,13 +208,17 @@ class PlaybackEngine(QObject):
             except Exception:
                 pass
         self._is_playing = False
-        self._timer.stop()
-        self.state_changed.emit("paused")
+        self._tick_timer.stop()
+        self._set_state("paused")
 
     def stop(self):
         self._is_playing = False
-        self._timer.stop()
+        self._tick_timer.stop()
+        self._seek_timer.stop()
+        self._pending_seek = None
         self._close_proc()
+        self._last_frame = None
+        self._state = "stopped"
         self.state_changed.emit("stopped")
 
     def toggle(self):
@@ -165,74 +245,132 @@ class PlaybackEngine(QObject):
         self._wall_start = time.monotonic()
         self._wall_pos_start = self._position
 
+    # ============================================================
+    # Seek
+    # ============================================================
+    def request_seek(self, seconds):
+        """Called during timeline drag. Debounced."""
+        self._pending_seek = float(seconds)
+        self.position_changed.emit(self._pending_seek)
+        self._seek_timer.start(self.SEEK_DEBOUNCE_MS)
+
     def seek(self, seconds):
-        was_playing = self._is_playing
+        """Immediate seek (button, programmatic, single click)."""
+        self._pending_seek = float(seconds)
+        self._seek_timer.stop()
+        self._apply_debounced_seek()
+
+    def _apply_debounced_seek(self):
+        if self._pending_seek is None:
+            return
+        target = self._pending_seek
+        self._pending_seek = None
+        self._apply_seek(target)
+
+    def _apply_seek(self, seconds, force_pause=False):
+        """Do the real seek: kill ffmpeg, decide segment, spawn new one."""
+        seconds = max(0.0, float(seconds))
+
+        was_playing = self._is_playing and not force_pause
         self._is_playing = False
-        self._timer.stop()
-        self.state_changed.emit("seeking")
+        self._tick_timer.stop()
 
-        try:
-            self._seek_internal(float(seconds))
-        except Exception as e:
-            print(f"[PlaybackEngine] seek error: {e}")
-
-        if was_playing and self._proc is not None:
-            self._wall_start = time.monotonic()
-            self._wall_pos_start = self._position
-            self._is_playing = True
-            self.state_changed.emit("playing")
-            self._timer.start(self.TICK_MS)
-        else:
-            self.state_changed.emit("paused")
-
-    def step_frame(self, direction=1):
-        if direction < 0:
-            new_pos = max(0.0, self._position - 1.0 / max(1.0, self._fps))
-            self._seek_internal(new_pos)
-        else:
-            if self._proc and self._proc.stdout:
-                try:
-                    raw = self._proc.stdout.read(self._frame_size)
-                    if len(raw) == self._frame_size:
-                        frame = np.frombuffer(raw, np.uint8).reshape(
-                            (self.OUT_H, self.OUT_W, 3)).copy()
-                        self._position += 1.0 / max(1.0, self._fps)
-                        self._emit_rgb(frame)
-                        self.position_changed.emit(self._position)
-                except Exception:
-                    pass
-
-    # ============================================================
-    # Internals
-    # ============================================================
-    def _seek_internal(self, seconds):
+        # Kill any existing ffmpeg
         self._close_proc()
 
-        if not self._ffmpeg:
-            return
+        # Find segment covering target
+        idx = self._find_segment(seconds)
 
-        idx = self._segment_index_for(seconds)
-        if idx < 0:
+        if idx is None:
+            # GAP — no segment covers this position
+            self._position = seconds
+            self._set_state("gap")
+            self._last_frame = None
+            self.frame_ready.emit(None)
+            self.position_changed.emit(self._position)
+            # Do NOT auto-resume playing during gap
             return
 
         self._segment_idx = idx
         seg = self._segments[idx]
-        path = seg["path"]
 
-        if not os.path.isfile(path):
+        # FPS
+        if seg.get("fps") and seg["fps"] > 1.0:
+            self._fps = float(seg["fps"])
+        else:
+            self._fps = 25.0
+
+        # Popen ffmpeg
+        ok = self._open_segment(seg, offset=seconds - seg["start"])
+        if not ok:
+            self._set_state("error")
             return
 
-        offset = max(0.0, seconds - float(seg["start"]))
+        self._position = seconds
+        self.position_changed.emit(self._position)
+        self.segment_changed.emit(idx)
 
-        vf = (f"scale={self.OUT_W}:{self.OUT_H}:"
-              f"force_original_aspect_ratio=decrease,"
-              f"pad={self.OUT_W}:{self.OUT_H}:(ow-iw)/2:(oh-ih)/2,"
-              f"format=bgr24")
+        # Read first frame immediately
+        frame = self._read_one_frame()
+        if frame is not None:
+            self._emit_rgb(frame)
 
-        # Use -ss before -i for fast keyframe seek
+        # Resume playing if we were
+        if was_playing:
+            self._is_playing = True
+            self._set_state("playing")
+            self._wall_start = time.monotonic()
+            self._wall_pos_start = self._position
+            self._tick_timer.start(self.TICK_MS)
+        else:
+            self._set_state("paused")
+
+    def step_frame(self, direction=1):
+        if direction < 0:
+            new_pos = max(0.0, self._position - 1.0 / max(1.0, self._fps))
+            self._apply_seek(new_pos, force_pause=True)
+        else:
+            if self._proc and self._proc.stdout:
+                frame = self._read_one_frame()
+                if frame is not None:
+                    self._position += 1.0 / max(1.0, self._fps)
+                    self._emit_rgb(frame)
+                    self.position_changed.emit(self._position)
+
+    # ============================================================
+    # Internals
+    # ============================================================
+    def _find_segment(self, seconds) -> Optional[int]:
+        """Return segment index covering `seconds`, or None if in gap."""
+        for i, s in enumerate(self._segments):
+            if s["start"] <= seconds < s["end"]:
+                return i
+        return None
+
+    def _find_next_segment(self, after_sec) -> Optional[int]:
+        for i, s in enumerate(self._segments):
+            if s["start"] >= after_sec:
+                return i
+        return None
+
+    def _open_segment(self, seg, offset):
+        if not self._ffmpeg:
+            return False
+        path = seg["path"]
+        if not os.path.isfile(path):
+            return False
+
+        vf = (
+            f"scale={self.OUT_W}:{self.OUT_H}:force_original_aspect_ratio=decrease,"
+            f"pad={self.OUT_W}:{self.OUT_H}:(ow-iw)/2:(oh-ih)/2,"
+            f"format=bgr24"
+        )
+
         cmd = [
-            self._ffmpeg, "-hide_banner", "-loglevel", "error",
-            "-ss", f"{offset:.3f}",
+            self._ffmpeg,
+            "-hide_banner", "-loglevel", "error",
+            "-fflags", "+genpts+discardcorrupt",
+            "-ss", f"{max(0.0, offset):.3f}",
             "-i", path,
             "-an", "-sn",
             "-vf", vf,
@@ -248,41 +386,18 @@ class PlaybackEngine(QObject):
                 bufsize=self._frame_size * 4,
                 **_spawn_kwargs()
             )
+            self._cap_open = True
+            return True
         except Exception as e:
             print(f"[PlaybackEngine] spawn failed: {e}")
             self._proc = None
-            return
-
-        self._fps = 25.0
-        self._position = float(seconds)
-
-        # Read first frame
-        try:
-            raw = self._proc.stdout.read(self._frame_size)
-            if len(raw) == self._frame_size:
-                frame = np.frombuffer(raw, np.uint8).reshape(
-                    (self.OUT_H, self.OUT_W, 3)).copy()
-                self._emit_rgb(frame)
-        except Exception:
-            pass
-
-        self.segment_changed.emit(idx)
-        self.position_changed.emit(self._position)
-
-    def _segment_index_for(self, seconds):
-        for i, s in enumerate(self._segments):
-            s0 = float(s["start"])
-            s1 = s0 + float(s["duration"])
-            if s0 <= seconds <= s1:
-                return i
-        for i, s in enumerate(self._segments):
-            if float(s["start"]) > seconds:
-                return i
-        return len(self._segments) - 1
+            self._cap_open = False
+            return False
 
     def _close_proc(self):
         p = self._proc
         self._proc = None
+        self._cap_open = False
         if p is None:
             return
         try:
@@ -302,29 +417,87 @@ class PlaybackEngine(QObject):
             except Exception:
                 pass
 
+    def _read_one_frame(self):
+        if not self._proc or not self._proc.stdout:
+            return None
+        try:
+            raw = self._proc.stdout.read(self._frame_size)
+        except Exception:
+            return None
+        if len(raw) != self._frame_size:
+            return None
+        return np.frombuffer(raw, np.uint8).reshape(
+            (self.OUT_H, self.OUT_W, 3)).copy()
+
     def _emit_rgb(self, bgr_frame):
         try:
-            import cv2
-            rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+            rgb = bgr_frame[:, :, ::-1].copy()   # BGR → RGB fast
         except Exception:
-            rgb = bgr_frame[:, :, ::-1].copy()  # fast fallback
+            return
         self._last_frame = rgb
         self.frame_ready.emit(rgb)
 
-    def _advance_segment(self):
+    def _set_state(self, state):
+        if self._state != state:
+            self._state = state
+            self.state_changed.emit(state)
+
+    # ============================================================
+    # Segment advancement (with gap awareness)
+    # ============================================================
+    def _advance_to_next_segment(self) -> bool:
+        """Move to the next segment. Auto-skip small gaps, emit 'gap' for big ones."""
         self._close_proc()
-        nxt = self._segment_idx + 1
-        if nxt >= len(self._segments):
-            self._is_playing = False
-            self._timer.stop()
-            self.state_changed.emit("ended")
+
+        cur = self._segments[self._segment_idx] if 0 <= self._segment_idx < len(self._segments) else None
+        if cur is None:
             return False
-        seg = self._segments[nxt]
-        self._segment_idx = nxt
-        self._seek_internal(float(seg["start"]))
+
+        nxt_idx = self._segment_idx + 1
+        if nxt_idx >= len(self._segments):
+            self._is_playing = False
+            self._tick_timer.stop()
+            self._set_state("ended")
+            return False
+
+        nxt = self._segments[nxt_idx]
+        gap_sec = nxt["start"] - cur["end"]
+
+        # Big gap → emit gap state, jump instantly to next segment
+        if gap_sec > self.GAP_JUMP_THRESHOLD_SEC:
+            self._set_state("gap")
+            self.frame_ready.emit(None)
+            self._position = nxt["start"]
+            self.position_changed.emit(self._position)
+
+        self._segment_idx = nxt_idx
+        if nxt.get("fps") and nxt["fps"] > 1.0:
+            self._fps = float(nxt["fps"])
+        else:
+            self._fps = 25.0
+
+        ok = self._open_segment(nxt, offset=0.0)
+        if not ok:
+            self._is_playing = False
+            self._tick_timer.stop()
+            self._set_state("error")
+            return False
+
+        self._position = nxt["start"]
+        self.position_changed.emit(self._position)
+        self.segment_changed.emit(nxt_idx)
+
+        # reset wall clock for smoother pacing after jump
         self._wall_start = time.monotonic()
         self._wall_pos_start = self._position
-        return self._proc is not None
+
+        # First frame
+        frame = self._read_one_frame()
+        if frame is not None:
+            self._emit_rgb(frame)
+
+        self._set_state("playing")
+        return True
 
     # ============================================================
     # Tick
@@ -338,33 +511,33 @@ class PlaybackEngine(QObject):
             frame_interval = 1.0 / max(1.0, self._fps)
             behind = target_pos - self._position
 
+            # Not yet time for next frame
             if behind < frame_interval * 0.4:
                 return
 
-            frames_needed = max(1, int(behind / frame_interval))
+            frames_needed = int(behind / frame_interval)
+            if frames_needed < 1:
+                frames_needed = 1
             if frames_needed > self.MAX_READS_PER_TICK:
                 frames_needed = self.MAX_READS_PER_TICK
+                # reset wall clock to avoid permanent lag
                 self._wall_start = time.monotonic()
                 self._wall_pos_start = target_pos
 
             last_frame = None
             for _ in range(frames_needed):
-                if self._proc is None or self._proc.stdout is None:
-                    break
-                try:
-                    raw = self._proc.stdout.read(self._frame_size)
-                except Exception:
-                    break
-                if len(raw) != self._frame_size:
-                    if not self._advance_segment():
+                frame = self._read_one_frame()
+                if frame is None:
+                    # End of current segment → try next
+                    if not self._advance_to_next_segment():
                         return
                     return
-                last_frame = np.frombuffer(raw, np.uint8).reshape(
-                    (self.OUT_H, self.OUT_W, 3)).copy()
+                last_frame = frame
                 self._position += frame_interval
 
             if last_frame is not None:
                 self._emit_rgb(last_frame)
                 self.position_changed.emit(self._position)
+
         except Exception as e:
             print(f"[PlaybackEngine] tick error: {e}")

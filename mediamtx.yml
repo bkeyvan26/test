@@ -15,12 +15,8 @@ paths:
     record: yes
     recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
     recordFormat: mpegts
-    recordSegmentDuration: 1m
+    recordSegmentDuration: 5m
     recordDeleteAfter: 168h
-
-  cam_3059f25c_sub:
-    source: "rtsp://admin:12345678M@192.168.1.37:554/media/video2"
-    sourceOnDemand: no
 
   cam_5064cd2c:
     source: "rtsp://admin:12345678M@192.168.1.41:554/media/video1"
@@ -30,7 +26,3 @@ paths:
     recordFormat: mpegts
     recordSegmentDuration: 5m
     recordDeleteAfter: 168h
-
-  cam_5064cd2c_sub:
-    source: "rtsp://admin:12345678M@192.168.1.41:554/media/video2"
-    sourceOnDemand: no

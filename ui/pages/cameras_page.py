@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""K1 VMS — Cameras page (auto-applies changes to NVR)"""
+"""K1 VMS — Cameras page (smart NVR reload)"""
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QPushButton, QListWidget, QListWidgetItem,
     QLabel
@@ -16,7 +16,6 @@ from core.camera_manager import CameraManager
 from core import settings_manager
 
 
-# Status color mapping (matches NVR engine status values)
 STATUS_ICONS = {
     "recording":     ("🟢", "REC",       "#2ecc71"),
     "online":        ("🔵", "ONLINE",    "#3498db"),
@@ -45,7 +44,6 @@ class CamerasPage(BasePage):
         v.setContentsMargins(20, 20, 20, 20)
         v.setSpacing(12)
 
-        # ---------- Header ----------
         head = QHBoxLayout()
 
         title = QLabel("Camera Management")
@@ -76,7 +74,6 @@ class CamerasPage(BasePage):
         add_btn.clicked.connect(self._add_camera)
         head.addWidget(add_btn)
 
-        # Manual "Apply to NVR" button — kept for explicit re-apply
         apply_btn = QPushButton("  Apply to NVR")
         apply_btn.setIcon(make_icon("refresh", theme.COLOR_TEXT_PRIMARY, 14))
         apply_btn.setCursor(Qt.PointingHandCursor)
@@ -86,10 +83,9 @@ class CamerasPage(BasePage):
 
         v.addLayout(head)
 
-        # ---------- Hint bar ----------
         hint = QLabel(
-            "💡 تغییرات به صورت خودکار به MediaMTX اعمال می‌شود. "
-            "دکمه «Apply to NVR» برای اجبار به reload دستی است."
+            "💡 تغییرات مرتبط با NVR (IP، پروفایل، ضبط) به صورت خودکار "
+            "به MediaMTX اعمال می‌شود. تغییرات فقط لایو نیازی به reload ندارند."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet(f"""
@@ -102,7 +98,6 @@ class CamerasPage(BasePage):
         """)
         v.addWidget(hint)
 
-        # ---------- Camera List ----------
         self.list_widget = QListWidget()
         self.list_widget.setStyleSheet(f"""
             QListWidget {{
@@ -128,7 +123,6 @@ class CamerasPage(BasePage):
         self.list_widget.itemDoubleClicked.connect(lambda _: self._edit_camera())
         v.addWidget(self.list_widget, 1)
 
-        # ---------- Action row ----------
         act = QHBoxLayout()
         act.setSpacing(8)
 
@@ -156,7 +150,6 @@ class CamerasPage(BasePage):
 
         self._refresh_list()
 
-        # Subscribe to NVR status updates
         if self.nvr:
             try:
                 self.nvr.register_listener(self._on_nvr_status)
@@ -185,7 +178,7 @@ class CamerasPage(BasePage):
         """
 
     # ============================================================
-    # NVR status subscription
+    # NVR status
     # ============================================================
     def _on_nvr_status(self, statuses):
         new_summary = {
@@ -198,11 +191,7 @@ class CamerasPage(BasePage):
         self._statuses = statuses
         self._refresh_list()
 
-    # ============================================================
-    # NVR auto-apply
-    # ============================================================
     def _auto_apply_to_nvr(self):
-        """Automatically reload MediaMTX after any camera change."""
         if not self.nvr:
             return
         import config as _c
@@ -219,15 +208,13 @@ class CamerasPage(BasePage):
             print(f"[NVR] Auto-reload exception: {e}")
 
     def _manual_apply(self):
-        """Explicit reload button."""
         if not self.nvr:
             dlg_info(self, "NVR Engine not available.")
             return
         import config as _c
         if not _c.MEDIAMTX_EXE.exists():
             dlg_warning(self,
-                f"MediaMTX not found at:\n{_c.MEDIAMTX_EXE}\n\n"
-                f"Please place mediamtx.exe in D:\\k1motion\\")
+                f"MediaMTX not found at:\n{_c.MEDIAMTX_EXE}")
             return
         ok = self.nvr.reload(cameras=self.cam_manager.all(),
                              settings=settings_manager.load_settings())
@@ -237,7 +224,7 @@ class CamerasPage(BasePage):
             dlg_warning(self, f"Reload failed:\n{self.nvr.get_last_error()}", "NVR")
 
     # ============================================================
-    # List rendering
+    # List
     # ============================================================
     def _refresh_list(self):
         cur_uid = None
@@ -283,7 +270,6 @@ class CamerasPage(BasePage):
                 {"uid": cam.uid, "name": cam.name})
             self._refresh_list()
             self.cameras_changed.emit()
-            # Auto-apply changes to NVR
             self._auto_apply_to_nvr()
 
     def _edit_camera(self):
@@ -291,18 +277,56 @@ class CamerasPage(BasePage):
         if not uid:
             dlg_info(self, "Select a camera first.")
             return
-        c = self.cam_manager.get(uid)
-        if c is None:
+        old_cam = self.cam_manager.get(uid)
+        if old_cam is None:
             return
-        dlg = CameraDialog(c, self)
+
+        # Snapshot MediaMTX-relevant fields
+        old_state = self._mediatmx_state(old_cam)
+
+        dlg = CameraDialog(old_cam, self)
         if dlg.exec() == CameraDialog.Accepted:
             updated = dlg.get_camera()
             self.cam_manager.update(uid, updated)
             settings_manager.append_audit("camera.edit", "-", {"uid": uid})
             self._refresh_list()
             self.cameras_changed.emit()
-            # Auto-apply changes to NVR
-            self._auto_apply_to_nvr()
+
+            # ★ Only reload MediaMTX if relevant fields changed
+            new_state = self._mediatmx_state(updated)
+            if old_state != new_state:
+                print("[NVR] MediaMTX-relevant fields changed → reload")
+                self._auto_apply_to_nvr()
+            else:
+                print("[NVR] Only live settings changed → skip reload")
+
+    @staticmethod
+    def _mediatmx_state(cam):
+        """Fields that affect MediaMTX config."""
+        try:
+            profiles = getattr(cam, "stream_profiles", []) or []
+            prof_sig = tuple(
+                (p.id, p.url, p.rtsp_path) for p in profiles
+            )
+        except Exception:
+            prof_sig = ()
+
+        return {
+            "enabled": cam.enabled,
+            "ip": cam.ip,
+            "port": cam.port,
+            "user": cam.user,
+            "password": cam.password,
+            "rtsp_path_main": cam.rtsp_path_main,
+            "rtsp_path_sub": cam.rtsp_path_sub,
+            "recording_profile_id": getattr(cam, "recording_profile_id", ""),
+            "motion_profile_id": getattr(cam, "motion_profile_id", ""),
+            "record_enabled_continuous": cam.record_enabled_continuous,
+            "record_enabled_motion": cam.record_enabled_motion,
+            "record_segment_minutes": cam.record_segment_minutes,
+            "record_path_override": cam.record_path_override,
+            "profiles": prof_sig,
+        }
 
     def _delete_camera(self):
         uid = self._selected_uid()
@@ -317,7 +341,6 @@ class CamerasPage(BasePage):
         settings_manager.append_audit("camera.delete", "-", {"uid": uid})
         self._refresh_list()
         self.cameras_changed.emit()
-        # Auto-apply changes to NVR
         self._auto_apply_to_nvr()
 
     # ============================================================
