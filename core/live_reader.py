@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""K1 VMS — Live reader (Phase 1.2: warmup skip)"""
+"""K1 VMS — Live reader (Phase 2.0)
+
+Deterministic state machine for Single/Main readers.
+READY == at least one valid decoded frame is cached in _latest_frame.
+"""
 import os
 import sys
 import time
@@ -12,16 +16,17 @@ import numpy as np
 
 IS_WIN = sys.platform.startswith("win")
 MAX_CONSECUTIVE_FAILS = 10
-READER_DIAG_MODE = False
 
-ST_CREATED = "created"
-ST_CONNECTING = "connecting"
-ST_WAITING = "waiting"
-ST_READY = "ready"
-ST_RUNNING = "running"
-ST_RECONNECTING = "reconnecting"
-ST_ERROR = "error"
-ST_STOPPED = "stopped"
+# ---- State machine ----
+ST_CREATED   = "created"
+ST_STARTING  = "starting"
+ST_WAITING   = "waiting"
+ST_READY     = "ready"
+ST_RUNNING   = "running"
+ST_IDLE      = "idle"
+ST_STOPPING  = "stopping"
+ST_STOPPED   = "stopped"
+ST_ERROR     = "error"
 
 
 def _spawn_kwargs():
@@ -132,10 +137,10 @@ class LiveReader(QThread):
         self._stderr_thread = None
         self._attempt = 0
         self._created_at = time.monotonic()
-        self._attempt_started_at = self._created_at
+        self._first_frame_at = None
         self._udp_failed_461 = False
 
-        # ★ Phase 1.2: warmup skip (برای دوربین‌های HEVC رزولیشن بالا)
+        # Warmup skip for HEVC mid-stream connect
         if self.role == "single":
             self._warmup_total = max(3, int(self.target_fps * 0.6))
         else:
@@ -148,6 +153,9 @@ class LiveReader(QThread):
             return self._state
 
     def is_ready(self) -> bool:
+        """READY == at least one valid decoded frame is in cache."""
+        if self._latest_frame is None:
+            return False
         with self._state_lock:
             return self._state in (ST_READY, ST_RUNNING)
 
@@ -160,10 +168,13 @@ class LiveReader(QThread):
     def created_elapsed(self) -> float:
         return time.monotonic() - self._created_at
 
-    def current_attempt_elapsed(self) -> float:
-        return time.monotonic() - self._attempt_started_at
+    def first_frame_elapsed(self):
+        if self._first_frame_at is None:
+            return None
+        return self._first_frame_at - self._created_at
 
     def stop(self):
+        self._set_state(ST_STOPPING)
         self._running.clear()
         with self._proc_lock:
             p = self._proc
@@ -207,24 +218,6 @@ class LiveReader(QThread):
             self.state_changed.emit(self.uid, state)
         except Exception:
             pass
-
-    def _t(self, event, **ctx):
-        try:
-            if self.trace is not None:
-                self.trace.mark(event, **ctx)
-        except Exception:
-            pass
-        critical = {
-            "RETRY_ATTEMPT", "SINGLE_FFMPEG_SPAWN_END",
-            "SINGLE_FIRST_BYTES_READ", "STREAM_LOOP_ENDED",
-            "READ_EOF", "SINGLE_STATUS_ONLINE", "RETRY_SLEEP",
-        }
-        if event in critical:
-            try:
-                parts = " ".join(f"{k}={v}" for k, v in ctx.items())
-                print(f"[Reader:{self.uid}:{self.role}] {event}  {parts}")
-            except Exception:
-                pass
 
     def _isleep(self, seconds):
         end = time.monotonic() + float(seconds)
@@ -283,9 +276,7 @@ class LiveReader(QThread):
 
     def _build_cmd(self):
         vf = self._build_vf()
-        loglevel = "error"
         transport = self.effective_transport()
-
         if self.role == "grid":
             threads = "1"
             analyzedur = "1000000"
@@ -297,16 +288,14 @@ class LiveReader(QThread):
 
         args = [
             self._ffmpeg,
-            "-y", "-hide_banner", "-loglevel", loglevel,
+            "-y", "-hide_banner", "-loglevel", "error",
             "-threads", threads,
             "-rtsp_transport", transport,
             "-fflags", "nobuffer+discardcorrupt+genpts+igndts",
             "-flags", "low_delay",
         ]
-
         if self.role == "single":
             args += ["-use_wallclock_as_timestamps", "1"]
-
         args += [
             "-analyzeduration", analyzedur,
             "-probesize", probesize,
@@ -324,9 +313,7 @@ class LiveReader(QThread):
                 p = self._proc
             if p is None or p.stderr is None:
                 return
-            t0 = time.monotonic()
             logged = 0
-            MAX_LOGGED = 3
             for line in iter(p.stderr.readline, b""):
                 if not self._running.is_set():
                     break
@@ -336,10 +323,8 @@ class LiveReader(QThread):
                     continue
                 if not s:
                     continue
-                if logged < MAX_LOGGED:
-                    elapsed_ms = (time.monotonic() - t0) * 1000.0
-                    print(f"[Reader:{self.uid}:{self.role}] STDERR "
-                          f"[{elapsed_ms:.0f}ms] {s[:200]}")
+                if logged < 3:
+                    print(f"[Reader:{self.uid}:{self.role}] STDERR {s[:180]}")
                     logged += 1
                 if "461" in s and "Unsupported Transport" in s:
                     if not self._force_tcp:
@@ -362,11 +347,9 @@ class LiveReader(QThread):
                 return b"", False
             try:
                 chunk = stdout.read(chunk_size)
-            except Exception as e:
-                self._t("READ_EXCEPTION", err=str(e))
+            except Exception:
                 return b"", False
             if not chunk:
-                self._t("READ_EOF", collected=len(self._read_buf))
                 return b"", False
             self._read_buf.extend(chunk)
         raw = bytes(self._read_buf[:expected])
@@ -383,13 +366,10 @@ class LiveReader(QThread):
             while self._running.is_set():
                 self._read_buf.clear()
                 self._attempt = consecutive_fails + 1
-                self._attempt_started_at = time.monotonic()
                 self._warmup_done = 0
 
                 if consecutive_fails > 0:
                     delay = min(2 ** min(consecutive_fails, 5), 30.0)
-                    self._t("RETRY_SLEEP", sec=f"{delay:.1f}",
-                            attempt=consecutive_fails)
                     self._isleep(delay)
                     if not self._running.is_set():
                         break
@@ -397,23 +377,13 @@ class LiveReader(QThread):
                 if self._udp_failed_461:
                     self._force_tcp = True
 
-                self._set_state(ST_CONNECTING if consecutive_fails == 0
-                                else ST_RECONNECTING)
-                self._t("RETRY_ATTEMPT", n=consecutive_fails + 1,
-                        max=MAX_CONSECUTIVE_FAILS, role=self.role,
-                        transport=self.effective_transport())
+                self._set_state(ST_STARTING if consecutive_fails == 0
+                                else "reconnecting")
                 self.status.emit(self.uid,
                                  "connecting…" if consecutive_fails == 0
                                  else f"reconnecting… ({consecutive_fails})")
 
                 cmd = self._build_cmd()
-                self._t("FFMPEG_COMMAND_DUMP",
-                        url_redacted=_redact_url(self.url),
-                        out_w=self.out_w, out_h=self.out_h,
-                        target_fps=self.target_fps,
-                        transport=self.effective_transport(),
-                        role=self.role)
-
                 try:
                     proc = subprocess.Popen(
                         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -430,26 +400,22 @@ class LiveReader(QThread):
                 with self._proc_lock:
                     self._proc = proc
 
-                pid = proc.pid
-                self._t("SINGLE_FFMPEG_SPAWN_END", pid=pid)
-
                 try:
                     self._stderr_thread = threading.Thread(
                         target=self._stderr_reader_loop, daemon=True)
                     self._stderr_thread.start()
                 except Exception:
-                    self._stderr_thread = None
+                    pass
 
                 self._set_state(ST_WAITING)
 
-                # ★ Phase 1.2: warmup — دور ریختن فریم‌های اول
-                # (HEVC mid-stream باعث VPS/PPS errors و فریم‌های خراب می‌شود)
+                # Warmup: discard first N frames (HEVC mid-stream junk)
                 warm_ok = True
-                for i in range(self._warmup_total):
+                for _ in range(self._warmup_total):
                     if not self._running.is_set():
                         warm_ok = False
                         break
-                    _raw, ok = self._read_frame(pid)
+                    _raw, ok = self._read_frame(proc.pid)
                     if not ok:
                         warm_ok = False
                         break
@@ -466,17 +432,8 @@ class LiveReader(QThread):
                         break
                     continue
 
-                first_raw, ok = self._read_frame(pid)
-
+                first_raw, ok = self._read_frame(proc.pid)
                 if not ok or not first_raw:
-                    try:
-                        poll = proc.poll()
-                    except Exception:
-                        poll = None
-                    self._t("SINGLE_FIRST_BYTES_READ",
-                            n=len(first_raw) if first_raw else 0,
-                            expected=self._frame_size,
-                            proc_poll=poll, ok=False)
                     self._kill_proc_internal()
                     if not self._running.is_set():
                         break
@@ -487,8 +444,6 @@ class LiveReader(QThread):
                         break
                     continue
 
-                self._t("SINGLE_FIRST_BYTES_READ",
-                        n=len(first_raw), expected=self._frame_size, ok=True)
                 consecutive_fails = 0
 
                 try:
@@ -497,6 +452,7 @@ class LiveReader(QThread):
                     self._seq = 1
                     self._latest_frame = rgb
                     self._latest_frame_seq = 1
+                    self._first_frame_at = time.monotonic()
                     self._set_state(ST_READY)
                     try:
                         self.first_frame_ready.emit(self.uid)
@@ -504,16 +460,18 @@ class LiveReader(QThread):
                         pass
                     self.frame_ready.emit(self.uid, (1, rgb))
                     self.status.emit(self.uid, "online")
-                    self._t("SINGLE_STATUS_ONLINE", pid=pid)
-                except Exception as e:
-                    self._t("SINGLE_FIRST_DECODED_FRAME_FAILED", err=str(e))
+                    if self.role == "single":
+                        ff_ms = (self._first_frame_at - self._created_at) * 1000
+                        print(f"[PREWARM] FIRST_SINGLE_FRAME uid={self.uid} "
+                              f"elapsed_ms={ff_ms:.0f}")
+                except Exception:
                     self._kill_proc_internal()
                     consecutive_fails += 1
                     continue
 
                 self._set_state(ST_RUNNING)
                 while self._running.is_set():
-                    raw, ok = self._read_frame(pid)
+                    raw, ok = self._read_frame(proc.pid)
                     if not ok:
                         break
                     try:
@@ -526,12 +484,11 @@ class LiveReader(QThread):
                     except Exception:
                         pass
 
-                self._t("STREAM_LOOP_ENDED", seq=self._seq)
                 self._kill_proc_internal()
                 if not self._running.is_set():
                     break
 
-                self._set_state(ST_RECONNECTING)
+                self._set_state("reconnecting")
                 self.status.emit(self.uid, "reconnecting…")
                 self._isleep(1.0)
         finally:

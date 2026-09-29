@@ -46,7 +46,7 @@ EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 # ============================================================
 # 🎥 MediaMTX
 # ============================================================
-MEDIAMTX_EXE = APP_DIR / "mediamtx.exe"        # در ویندوز
+MEDIAMTX_EXE = APP_DIR / "mediamtx.exe"
 MEDIAMTX_YML = APP_DIR / "mediamtx.yml"
 MEDIAMTX_LOG = APP_DIR / "mediamtx.log"
 MEDIAMTX_PID = APP_DIR / "mediamtx.pid"
@@ -60,19 +60,22 @@ MEDIAMTX_API_URL = f"http://{MEDIAMTX_HOST}:{MEDIAMTX_API_PORT}"
 MEDIAMTX_RTSP_URL = f"rtsp://{MEDIAMTX_HOST}:{MEDIAMTX_RTSP_PORT}"
 
 # ============================================================
-# 📡 Live View — Routing (★ جدید)
+# 📡 Live View — Routing
 # ============================================================
 # False → Live/Single مستقیم به دوربین وصل می‌شود (سریع‌تر، پیش‌فرض)
 # True  → از طریق MediaMTX (اتصال کمتر به دوربین)
 LIVE_USE_MEDIAMTX = False
 
 # RTSP transport: 'udp' (سریع روی LAN) یا 'tcp' (پایدارتر)
+# ★ Requirement 11: UDP پیش‌فرض
 LIVE_RTSP_TRANSPORT = "udp"
 
-# حداکثر تعداد readerهای Single همزمان
+# ★ Requirement 8: حداکثر تعداد readerهای Single همزمان
+# (فقط برای دوربین‌های visible در grid؛ بقیه cold start می‌شوند)
 LIVE_MAX_SINGLE_READERS = 6
 
-# زمان idle قبل از بستن reader Single (ثانیه)
+# ★ Requirement 7: زمان idle قبل از بستن reader Single (ثانیه)
+# 600 ثانیه = 10 دقیقه
 LIVE_SINGLE_IDLE_SEC = 600
 
 # ============================================================
