@@ -1,0 +1,94 @@
+logLevel: info
+logDestinations: [stdout]
+
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+
+api: yes
+apiAddress: :9997
+
+paths:
+  cam_3059f25c:
+    source: "rtsp://admin:12345678M@192.168.1.37:554/media/video1"
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  cam_5064cd2c:
+    source: "rtsp://admin:12345678M@192.168.1.41:554/media/video1"
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  cam_1e437edf:
+    source: "rtsp://admin:12345678M%40@192.168.1.73:554/media/video1"
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  cam_1e437edf_sub:
+    source: "rtsp://admin:12345678M%40@192.168.1.73:554/media/video2"
+    sourceOnDemand: no
+
+  cam_4ccffac5:
+    source: "rtsp://admin:12345678M@192.168.1.40:554/media/video1"
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  cam_794a5911:
+    source: "rtsp://admin:12345678M@192.168.1.42:554/media/video1"
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  cam_794a5911_sub:
+    source: "rtsp://admin:12345678M@192.168.1.42:554/media/video2"
+    sourceOnDemand: no
+
+  cam_0223960a:
+    source: "rtsp://admin:12345678M%40@192.168.1.60:554/media/video1"
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  cam_0223960a_sub:
+    source: "rtsp://admin:12345678M%40@192.168.1.60:554/media/video2"
+    sourceOnDemand: no
+
+  cam_676bf0fe:
+    source: "rtsp://admin:12345678M%40@172.20.34.112:554/axis-media/media.amp"
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  cam_cf7ba8b4:
+    source: "rtsp://admin:12345678M%40@172.20.34.113:554/"
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
