@@ -1,20 +1,12 @@
 # -*- coding: utf-8 -*-
-"""K1 VMS — Live View page (Phase 2.0)
+"""K1 VMS — Live View page (Phase 3.0)
 
-Architecture:
-  Grid Reader (low-res)  → cell render in Grid mode
-  Single Reader (high-res) → cell render in Single mode
+Serial prewarm: only ONE Main/Single decoder starts at a time.
+Next starts only after current reaches READY (or timeout).
+This eliminates CPU contention that was causing 24-36s first-frame delays.
 
-Auto-prewarm:
-  Every camera visible in a Grid tile gets its Single Reader started
-  asynchronously. Prewarm is considered complete only when the Single
-  Reader has cached its first valid frame (is_ready()).
-
-Double-click = pure view switch. No RTSP connect, no FFmpeg spawn
-when the Single Reader is already READY.
-
-Single → Grid does NOT kill the Single Reader. Idle policy (600s)
-releases it later.
+Double-click = pure view switch when reader is READY (fast path).
+Fallback bridge (grid frame) when reader is still prewarming.
 """
 import os
 import json
@@ -54,7 +46,11 @@ import config
 
 
 STATE_FILE = config.DATA_DIR / "live_state.json"
-STUCK_READER_SEC = 8.0
+
+# Timing (can be overridden from config)
+PREWARM_COALESCE_MS = getattr(config, "LIVE_PREWARM_COALESCE_MS", 500)
+PREWARM_STAGGER_MS = getattr(config, "LIVE_PREWARM_STAGGER_MS", 300)
+PREWARM_STUCK_SEC = getattr(config, "LIVE_PREWARM_STUCK_SEC", 20)
 
 
 class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
@@ -64,17 +60,14 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
 
     DEFAULT_LAYOUT = "2x2"
 
-    # ★ Idle policy — 10 minutes (Requirement 7)
-    SINGLE_IDLE_TIMEOUT_SEC = 600
-    IDLE_CHECK_INTERVAL_MS = 30_000
+    # ★ Idle policy: 10 minutes
+    SINGLE_IDLE_TIMEOUT_SEC = getattr(
+        config, "LIVE_SINGLE_IDLE_SEC", 600)
+    IDLE_CHECK_INTERVAL_MS = 5_000   # ★ 5s (was 30s) for prewarm watchdog
 
-    # ★ Resource limit (Requirement 8)
+    # ★ Resource limit
     MAX_PREWARM_SINGLE_READERS = getattr(
         config, "LIVE_MAX_SINGLE_READERS", 6)
-
-    # ★ Auto-prewarm delay after a layout change (debounce)
-    PREWARM_AFTER_LAYOUT_MS = 400
-    PREWARM_STAGGER_MS = 120    # stagger to avoid CPU spike
 
     STATE_FILE = STATE_FILE
 
@@ -97,11 +90,15 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self._single_ready_uids = set()
         self._single_ready_walltime = {}
 
-        # Staggered prewarm queue
-        self._prewarm_queue = []       # list of uids
-        self._prewarm_queue_timer = QTimer(self)
-        self._prewarm_queue_timer.setSingleShot(True)
-        self._prewarm_queue_timer.timeout.connect(self._drain_prewarm_queue)
+        # ★ Prewarm state (Phase 3.0: serial)
+        self._prewarm_queue = []
+        self._prewarm_in_flight = None
+        self._prewarm_in_flight_start = 0.0
+
+        self._prewarm_coalesce_timer = QTimer(self)
+        self._prewarm_coalesce_timer.setSingleShot(True)
+        self._prewarm_coalesce_timer.timeout.connect(
+            self._prewarm_visible_cameras)
 
         self._single_last_used = {}
         self._single_idle_timer = QTimer(self)
@@ -117,8 +114,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self._restoring = False
         self._initial_fill_done = False
 
-        self._grid_traces = {}
-
         self._mediamtx_retry = {}
         self._max_mediamtx_retry = 8
 
@@ -127,7 +122,7 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self._restore_state()
 
     # ============================================================
-    # Reader retirement (crash-safe)
+    # Reader retirement
     # ============================================================
     def _retire_reader(self, reader):
         if reader is None:
@@ -239,8 +234,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self.grid.cell_context.connect(self._on_cell_context)
         self.grid.cell_drop_camera.connect(self._on_cell_drop_camera)
         self.grid.cell_swap.connect(self._on_cell_swap)
-        self.grid.cell_hover_entered.connect(self._on_cell_hover_entered)
-        self.grid.cell_hover_left.connect(self._on_cell_hover_left)
         v.addWidget(self.grid, 1)
         return center
 
@@ -341,16 +334,8 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
     def _mediamtx_path_ready(self, cam, profile_id):
         return mediamtx_path_ready(self.nvr, cam, profile_id)
 
-    def _query_mediamtx_state(self, cam, profile_id):
-        return query_mediamtx_state(self.nvr, cam, profile_id)
-
-    def _collect_prewarm_state(self, uid):
-        return collect_prewarm_state(
-            uid, self.single_readers, self._single_ready_uids,
-            None, False, None)
-
     # ============================================================
-    # Layout (Requirement 9)
+    # Layout
     # ============================================================
     def _on_layout_selected(self, key):
         if self.grid.is_fullscreen():
@@ -377,7 +362,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             self.grid.clear_cell(i)
             self.grid.set_uid(i, "")
 
-        # Only readers needed by the new layout stay alive
         kept_uids = set()
         for i in range(min(n, len(old_cell_uids))):
             uid = old_cell_uids[i]
@@ -392,7 +376,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self.uid_to_cell.clear()
         self.cell_source.clear()
 
-        # Reattach existing readers
         for i in range(min(n, len(old_cell_uids))):
             uid = old_cell_uids[i]
             if not uid or uid not in self.grid_readers:
@@ -413,90 +396,103 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
                 if f is not None:
                     self.grid.set_frame(i, (r.get_latest_frame_seq(), f))
 
-        # ★ Auto-prewarm for currently visible cameras
-        QTimer.singleShot(self.PREWARM_AFTER_LAYOUT_MS,
-                          self._prewarm_visible_cameras)
+        # ★ Schedule prewarm (coalesced, fires once)
+        self._schedule_prewarm_visible()
 
         if save:
             self._save_state_to_disk()
 
     # ============================================================
-    # Auto-prewarm (Requirements 1, 2, 3, 8)
+    # Prewarm scheduler (Phase 3.0 — SERIAL)
     # ============================================================
+    def _schedule_prewarm_visible(self):
+        """Debounce: multiple layout changes coalesce into one prewarm pass."""
+        self._prewarm_coalesce_timer.start(PREWARM_COALESCE_MS)
+
     def _prewarm_visible_cameras(self):
-        """Queue Single/Main reader starts for every camera currently
-        visible in a Grid tile."""
+        """Build queue of visible cameras needing a prewarm reader."""
         if self._shutting_down or self._clearing:
             return
 
         visible = []
         for idx in range(len(self.grid.get_cells())):
             uid = self.cell_to_uid.get(idx)
-            if not uid:
-                continue
-            if uid in visible:
+            if not uid or uid in visible:
                 continue
             visible.append(uid)
 
-        # Filter: skip same-profile and already-ready/queued
+        # Fullscreen camera highest priority
+        if self._fullscreen_uid and self._fullscreen_uid in visible:
+            visible.remove(self._fullscreen_uid)
+            visible.insert(0, self._fullscreen_uid)
+
         queue = []
         for uid in visible:
             if uid in self._single_ready_uids:
+                continue
+            if uid in self.single_readers:
+                # Already warming up; leave in flight
                 continue
             cam = self.cam_manager.get(uid)
             if cam is None:
                 continue
             if cam.live_profile_id == cam.grid_profile_id:
                 continue
-            if uid in self.single_readers:
-                # already starting/waiting, keep it (do not re-create)
-                continue
             queue.append(uid)
 
         self._prewarm_queue = queue
         if queue:
-            print(f"[prewarm] visible-cameras: {len(queue)} cameras queued")
-            self._drain_prewarm_queue()
+            print(f"[prewarm] visible-cameras: {len(queue)} queued "
+                  f"(serial mode)")
+        self._drain_prewarm_queue()
 
     def _drain_prewarm_queue(self):
+        """Start next prewarm ONLY if no other prewarm is in flight."""
         if self._shutting_down or self._clearing:
             self._prewarm_queue = []
             return
+        if self._prewarm_in_flight is not None:
+            return   # wait for current to complete
         if not self._prewarm_queue:
             return
-        uid = self._prewarm_queue.pop(0)
 
-        # Respect resource limit
+        # Respect limit
         if len(self.single_readers) >= self.MAX_PREWARM_SINGLE_READERS:
-            evicted = self._evict_lru_single_reader()
-            if not evicted:
-                print("[prewarm] limit reached, skipping rest")
+            if not self._evict_lru_single_reader():
+                print("[prewarm] limit reached, dropping remaining queue")
                 self._prewarm_queue = []
                 return
 
-        # Skip if already present or same-profile
+        uid = self._prewarm_queue.pop(0)
+
         if uid in self.single_readers:
-            self._schedule_next_prewarm()
+            QTimer.singleShot(50, self._drain_prewarm_queue)
             return
         cam = self.cam_manager.get(uid)
         if cam is None:
-            self._schedule_next_prewarm()
+            QTimer.singleShot(50, self._drain_prewarm_queue)
             return
         if cam.live_profile_id == cam.grid_profile_id:
-            self._schedule_next_prewarm()
+            QTimer.singleShot(50, self._drain_prewarm_queue)
             return
 
-        print(f"[prewarm] PREWARM_BEGIN uid={uid}")
+        print(f"[PREWARM] BEGIN uid={uid}")
+        self._prewarm_in_flight = uid
+        self._prewarm_in_flight_start = time.monotonic()
         self._start_single_reader(uid)
-        self._schedule_next_prewarm()
 
-    def _schedule_next_prewarm(self):
-        if not self._prewarm_queue:
+    def _on_prewarm_reader_ready(self, uid):
+        """Called from _on_single_frame when a single reader first decodes."""
+        if self._prewarm_in_flight != uid:
             return
-        self._prewarm_queue_timer.start(self.PREWARM_STAGGER_MS)
+        elapsed = (time.monotonic()
+                   - self._prewarm_in_flight_start) * 1000
+        print(f"[PREWARM] READY uid={uid} elapsed_ms={elapsed:.0f}")
+        self._prewarm_in_flight = None
+        # Stagger before next
+        QTimer.singleShot(PREWARM_STAGGER_MS, self._drain_prewarm_queue)
 
     def _evict_lru_single_reader(self):
-        """Evict least-recently-used Single Reader (never the fullscreen one)."""
         if not self.single_readers:
             return False
         candidates = [
@@ -504,17 +500,18 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             if uid in self.single_readers
             and uid != self._fullscreen_uid
             and uid != self._pending_switch
+            and uid != self._prewarm_in_flight
         ]
         if not candidates:
             return False
         candidates.sort(key=lambda x: x[1])
         oldest = candidates[0][0]
-        print(f"[prewarm] evicting LRU single reader uid={oldest}")
+        print(f"[prewarm] LRU evict uid={oldest}")
         self._force_stop_single_reader(oldest)
         return True
 
     # ============================================================
-    # Assign camera to cell
+    # Assign camera
     # ============================================================
     def _assign_camera_to_cell(self, cell_idx, uid, start=True, save=True):
         cells = self.grid.get_cells()
@@ -544,9 +541,7 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             self.grid.set_status(cell_idx, "connecting…")
         if start:
             self._start_grid_reader(uid)
-            # Schedule prewarm for this new visible camera
-            QTimer.singleShot(self.PREWARM_AFTER_LAYOUT_MS,
-                              self._prewarm_visible_cameras)
+            # ★ Do NOT schedule prewarm here — coalesced at layout level
         if save:
             self._save_state_to_disk()
 
@@ -567,9 +562,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             self._mediamtx_retry[uid] = cnt
             if cnt > self._max_mediamtx_retry:
                 self._mediamtx_retry.pop(uid, None)
-                idx = self.uid_to_cell.get(uid)
-                if idx is not None:
-                    self.grid.set_status(idx, "source unavailable")
                 return
             QTimer.singleShot(700, lambda u=uid: self._start_grid_reader(u))
             return
@@ -603,7 +595,7 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         if self._clearing or self._shutting_down:
             return
         if uid in self.single_readers:
-            return   # already running — never duplicate
+            return   # never duplicate
         self._single_last_used[uid] = time.monotonic()
 
         cam = self.cam_manager.get(uid)
@@ -616,7 +608,8 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             if cnt > self._max_mediamtx_retry:
                 self._mediamtx_retry.pop(uid, None)
                 return
-            QTimer.singleShot(500, lambda u=uid: self._start_single_reader(u))
+            QTimer.singleShot(500,
+                              lambda u=uid: self._start_single_reader(u))
             return
         self._mediamtx_retry.pop(uid, None)
 
@@ -626,8 +619,8 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         out_w, out_h = self._compute_output_size_for(cam, "single")
         fps = self._compute_fps_for(cam, "single")
         transport = get_live_transport()
-        print(f"[prewarm] FFMPEG_SPAWN uid={uid} "
-              f"fps={fps} size={out_w}x{out_h}")
+        print(f"[prewarm] FFMPEG_SPAWN uid={uid} fps={fps} "
+              f"size={out_w}x{out_h}")
 
         reader = LiveReader(uid, url, target_fps=fps,
                             out_w=out_w, out_h=out_h, role="single",
@@ -641,7 +634,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self.single_readers[uid] = reader
 
     def _release_single_reader(self, uid):
-        """Mark as recently used. DOES NOT stop the reader."""
         if uid not in self.single_readers:
             return
         self._single_last_used[uid] = time.monotonic()
@@ -665,6 +657,9 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             return
         if self._pending_switch == uid:
             self._pending_switch = None
+        if self._prewarm_in_flight == uid:
+            self._prewarm_in_flight = None
+            QTimer.singleShot(300, self._drain_prewarm_queue)
         self._single_ready_uids.discard(uid)
         self._single_ready_walltime.pop(uid, None)
 
@@ -673,7 +668,7 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             return
         now = time.monotonic()
 
-        # Detect dead threads
+        # Dead threads
         for uid in list(self.single_readers.keys()):
             r = self.single_readers[uid]
             try:
@@ -683,21 +678,35 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             if not alive:
                 if self._pending_switch == uid:
                     self._pending_switch = None
+                if self._prewarm_in_flight == uid:
+                    self._prewarm_in_flight = None
                 self._force_stop_single_reader(uid)
 
-        # Idle timeout (600s)
+        # ★ Prewarm watchdog
+        if self._prewarm_in_flight is not None:
+            elapsed = now - self._prewarm_in_flight_start
+            if elapsed > PREWARM_STUCK_SEC:
+                uid = self._prewarm_in_flight
+                print(f"[PREWARM] STUCK uid={uid} elapsed={elapsed:.1f}s")
+                self._prewarm_in_flight = None
+                self._force_stop_single_reader(uid)
+                print(f"[PREWARM] RECOVER uid={uid}")
+                QTimer.singleShot(500, self._drain_prewarm_queue)
+
+        # Idle timeout
         to_stop = []
         for uid in list(self.single_readers.keys()):
             if self._fullscreen_uid == uid:
                 continue
             if self._pending_switch == uid:
                 continue
+            if self._prewarm_in_flight == uid:
+                continue
             last = self._single_last_used.get(uid, 0)
             if now - last > self.SINGLE_IDLE_TIMEOUT_SEC:
                 to_stop.append(uid)
         for uid in to_stop:
-            print(f"[prewarm] idle timeout "
-                  f"({self.SINGLE_IDLE_TIMEOUT_SEC}s) uid={uid}")
+            print(f"[prewarm] idle timeout uid={uid}")
             self._force_stop_single_reader(uid)
 
     # ---- Frame handlers ----
@@ -714,23 +723,23 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         if self.single_readers.get(uid) is not reader:
             return
         self._single_last_used[uid] = time.monotonic()
-        cell_idx = self.uid_to_cell.get(uid)
 
         first_ready = uid not in self._single_ready_uids
         if first_ready:
             self._single_ready_uids.add(uid)
             self._single_ready_walltime[uid] = datetime.datetime.now()
-            print(f"[prewarm] PREWARM_READY uid={uid}")
+            # ★ Notify prewarm scheduler
+            self._on_prewarm_reader_ready(uid)
 
+        cell_idx = self.uid_to_cell.get(uid)
         if cell_idx is None:
             return
 
-        # If this uid is the pending fullscreen target: upgrade NOW
         if self._pending_switch == uid:
             self._pending_switch = None
             self.cell_source[cell_idx] = "single"
             self.grid.set_frame(cell_idx, payload)
-            print(f"[switch] FIRST_SINGLE_FRAME_AFTER_CLICK uid={uid}")
+            print(f"[SWITCH] FIRST_MAIN_AFTER_CLICK uid={uid}")
             return
 
         if self.cell_source.get(cell_idx) == "single":
@@ -743,17 +752,8 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             self.grid.set_status(idx, text)
         self._refresh_status_list()
 
-    # ---- Hover prewarm (kept as extra optimization, not primary) ----
-    def _on_cell_hover_entered(self, idx):
-        # No-op. Automatic visible-camera prewarm covers the needed cases.
-        return
-
-    def _on_cell_hover_left(self, idx):
-        return
-
     # ---- Cell interactions ----
     def _on_cell_clicked(self, idx):
-        # No-op; prewarm happens automatically for visible cameras.
         return
 
     def _on_cell_double_clicked(self, idx):
@@ -765,81 +765,84 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             self._enter_fullscreen_mode(idx)
 
     def _enter_fullscreen_mode(self, idx):
-        """★ Pure view switch. Never starts RTSP/FFmpeg if reader exists."""
         uid = self.cell_to_uid.get(idx)
         if not uid:
             return
 
         t0 = time.monotonic()
-        print(f"[switch] DOUBLE_CLICK uid={uid} idx={idx}")
-        print(f"[switch] VIEW_SWITCH_BEGIN")
+        print(f"[SWITCH] DOUBLE_CLICK uid={uid} idx={idx}")
 
         self._fullscreen_uid = uid
         self.grid.toggle_fullscreen_cell(idx)
 
-        # 1) Try existing Single Reader latest frame
+        # Fast path: ready single reader
         r = self.single_readers.get(uid)
         showed_single = False
         if r is not None:
-            print(f"[switch] SINGLE_READER_EXISTING uid={uid}")
+            print(f"[SWITCH] READER_EXISTING uid={uid}")
             if r.is_ready():
                 latest = r.get_latest_frame()
                 if latest is not None:
-                    self.grid.set_frame(idx, (r.get_latest_frame_seq(),
-                                              latest))
+                    self.grid.set_frame(idx,
+                                        (r.get_latest_frame_seq(), latest))
                     showed_single = True
-                    print(f"[switch] SINGLE_READER_READY")
-                    print(f"[switch] LATEST_SINGLE_FRAME_AVAILABLE")
+                    print(f"[SWITCH] READY uid={uid}")
+                    print(f"[SWITCH] LATEST_FRAME uid={uid}")
 
-        # 2) Fallback: show latest Grid frame as visual bridge
+        # Bridge: show latest grid frame if single not ready
         if not showed_single:
             gr = self.grid_readers.get(uid)
             if gr is not None:
                 g = gr.get_latest_frame()
                 if g is not None:
                     self.grid.set_frame(idx, (gr.get_latest_frame_seq(), g))
-                    print(f"[switch] fallback to grid frame")
+                    print(f"[SWITCH] GRID_BRIDGE uid={uid}")
 
         cam = self.cam_manager.get(uid)
         if cam is None:
             self.cell_source[idx] = "grid"
             return
 
-        # Same profile: nothing else to do
         if cam.live_profile_id == cam.grid_profile_id:
             self.cell_source[idx] = "single"
             self._pending_switch = None
             elapsed = (time.monotonic() - t0) * 1000
-            print(f"[switch] VIEW_SWITCH_END elapsed_ms={elapsed:.1f}")
+            print(f"[SWITCH] END elapsed_ms={elapsed:.1f}")
             return
 
-        # Already ready → done
         if uid in self._single_ready_uids and showed_single:
             self.cell_source[idx] = "single"
             self._pending_switch = None
             self._single_last_used[uid] = time.monotonic()
             elapsed = (time.monotonic() - t0) * 1000
-            print(f"[switch] VIEW_SWITCH_END elapsed_ms={elapsed:.1f}")
+            print(f"[SWITCH] END elapsed_ms={elapsed:.1f}")
             return
 
-        # Not ready yet → start reader if absent, set pending
+        # Cold path: start (or reuse in-flight) reader
         self.cell_source[idx] = "single"
         if uid not in self.single_readers:
-            print(f"[switch] starting single reader (cold) uid={uid}")
+            # If a prewarm is currently running for another uid, this one
+            # becomes the new in-flight priority
+            print(f"[SWITCH] cold-start uid={uid}")
             self._start_single_reader(uid)
+            self._prewarm_in_flight = uid
+            self._prewarm_in_flight_start = time.monotonic()
+        else:
+            # Reader exists but not ready → it's the current in-flight
+            self._prewarm_in_flight = uid
+            self._prewarm_in_flight_start = time.monotonic()
         self._pending_switch = uid
         self._single_last_used[uid] = time.monotonic()
         elapsed = (time.monotonic() - t0) * 1000
-        print(f"[switch] VIEW_SWITCH_END elapsed_ms={elapsed:.1f} (pending)")
+        print(f"[SWITCH] END elapsed_ms={elapsed:.1f} (pending)")
 
     def _exit_fullscreen_mode(self):
-        """★ DO NOT kill Single Reader. Just mark idle; idle timer will clean."""
         uid = self._fullscreen_uid
         if uid:
             cell_idx = self.uid_to_cell.get(uid)
             if cell_idx is not None:
                 self.cell_source[cell_idx] = "grid"
-            # Mark as recently used so idle timer doesn't kill immediately
+            # ★ Do NOT kill Single Reader; keep warm for 600s
             if uid in self.single_readers:
                 self._single_last_used[uid] = time.monotonic()
         self._fullscreen_uid = None
@@ -866,6 +869,7 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         if self._clearing:
             return
         self._assign_camera_to_cell(idx, uid, start=True)
+        self._schedule_prewarm_visible()
 
     def _on_cell_swap(self, src_idx, dst_idx):
         cells = self.grid.get_cells()
@@ -946,6 +950,7 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             return
         idx = self.grid.get_active_index()
         self._assign_camera_to_cell(idx, uid, start=True)
+        self._schedule_prewarm_visible()
 
     def _connect_all(self):
         if self._clearing:
@@ -957,6 +962,7 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
                 break
             self._assign_camera_to_cell(i, c.uid, start=True, save=False)
         self._save_state_to_disk()
+        self._schedule_prewarm_visible()
 
     def _on_clear(self):
         if self._clearing:
@@ -964,8 +970,9 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self._clearing = True
         try:
             self._prewarm_queue = []
+            self._prewarm_in_flight = None
             try:
-                self._prewarm_queue_timer.stop()
+                self._prewarm_coalesce_timer.stop()
             except Exception:
                 pass
 
@@ -1025,13 +1032,12 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
 
     # ---- Lifecycle ----
     def on_show(self):
-        """Returning from Playback: reuse healthy readers."""
         try:
             self.cam_manager.reload()
         except Exception:
             pass
         self._load_cameras()
-        # Reconcile: if grid readers died, restart for visible cameras
+        # Recover dead grid readers only
         for idx in range(len(self.grid.get_cells())):
             uid = self.cell_to_uid.get(idx)
             if not uid:
@@ -1042,9 +1048,8 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
                     self._stop_grid_reader(uid)
                 if uid in self.uid_to_cell:
                     self._start_grid_reader(uid)
-        # Prewarm visible cameras (schedule, non-blocking)
-        QTimer.singleShot(self.PREWARM_AFTER_LAYOUT_MS,
-                          self._prewarm_visible_cameras)
+        # Re-check prewarm for visible cameras
+        self._schedule_prewarm_visible()
 
     def on_hide(self):
         pass
@@ -1054,7 +1059,9 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             return
         self._shutting_down = True
         self._prewarm_queue = []
-        for t in (self._single_idle_timer, self._prewarm_queue_timer,
+        self._prewarm_in_flight = None
+        for t in (self._single_idle_timer,
+                  self._prewarm_coalesce_timer,
                   self._gc_timer):
             try:
                 t.stop()
@@ -1096,7 +1103,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self._single_ready_walltime.clear()
         self._single_last_used.clear()
         self._mediamtx_retry.clear()
-        self._grid_traces.clear()
 
     def _load_cameras(self):
         self.cam_list.blockSignals(True)
@@ -1130,10 +1136,11 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
                 target.append("")
             for i, uid in enumerate(target):
                 if uid and uid in valid_uids:
-                    self._assign_camera_to_cell(i, uid, start=True, save=False)
+                    self._assign_camera_to_cell(i, uid,
+                                                start=True, save=False)
             self._initial_fill_done = True
-            QTimer.singleShot(self.PREWARM_AFTER_LAYOUT_MS,
-                              self._prewarm_visible_cameras)
+            # ★ Single prewarm pass at end of restore
+            self._schedule_prewarm_visible()
         finally:
             self._restoring = False
             self._save_state_to_disk()

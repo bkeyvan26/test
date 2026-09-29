@@ -79,6 +79,21 @@ LIVE_MAX_SINGLE_READERS = 6
 LIVE_SINGLE_IDLE_SEC = 600
 
 # ============================================================
+# ⚙️ Prewarm Scheduling (Phase 3.0 — SERIAL)
+# ============================================================
+# ★ Debounce پنجره: چند trigger پشت‌سرهم در این بازه → یک prewarm pass
+# جلوگیری از ۵ spawn هم‌زمان در startup / layout change
+LIVE_PREWARM_COALESCE_MS = 500
+
+# ★ Stagger بین prewarm بعدی (فقط بعد از READY یا timeout قبلی)
+# در حالت serial معنی این عدد: تأخیر قبل از شروع reader بعدی
+LIVE_PREWARM_STAGGER_MS = 300
+
+# ★ Watchdog: اگر reader در حال prewarm بعد از این ثانیه‌ها READY نشد
+# → kill + move on به دوربین بعدی
+LIVE_PREWARM_STUCK_SEC = 20
+
+# ============================================================
 # 🖥️ رابط کاربری
 # ============================================================
 IS_WINDOWS = sys.platform.startswith("win")
