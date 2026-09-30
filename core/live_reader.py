@@ -146,6 +146,9 @@ class LiveReader(QThread):
         self._state_lock = threading.Lock()
         self._latest_frame = None
         self._latest_frame_seq = -1
+        # Keep the decoder/RTSP session alive while UI output is muted.
+        self._emit_enabled = True
+        self._emit_lock = threading.Lock()
 
         self._stderr_thread = None
         self._attempt = 0
@@ -179,6 +182,15 @@ class LiveReader(QThread):
 
     def get_latest_frame_seq(self):
         return self._latest_frame_seq
+
+    def set_output_enabled(self, enabled: bool):
+        """Mute/unmute Qt frame delivery without stopping the decoder."""
+        with self._emit_lock:
+            self._emit_enabled = bool(enabled)
+
+    def is_output_enabled(self):
+        with self._emit_lock:
+            return self._emit_enabled
 
     def created_elapsed(self):
         return time.monotonic() - self._created_at
@@ -535,7 +547,8 @@ class LiveReader(QThread):
                         self.first_frame_ready.emit(self.uid)
                     except Exception:
                         pass
-                    self.frame_ready.emit(self.uid, (1, rgb))
+                    if self.is_output_enabled():
+                        self.frame_ready.emit(self.uid, (1, rgb))
                     try:
                         self.status.emit(self.uid, "online")
                     except Exception:
@@ -561,7 +574,8 @@ class LiveReader(QThread):
                         self._seq += 1
                         self._latest_frame = rgb
                         self._latest_frame_seq = self._seq
-                        self.frame_ready.emit(self.uid, (self._seq, rgb))
+                        if self.is_output_enabled():
+                            self.frame_ready.emit(self.uid, (self._seq, rgb))
                     except Exception:
                         pass
 
