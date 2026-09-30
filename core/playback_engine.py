@@ -5,6 +5,7 @@ import sys
 import time
 import shutil
 import subprocess
+import bisect
 import threading
 import queue
 from dataclasses import dataclass
@@ -144,6 +145,7 @@ class PlaybackEngine(QObject):
         self._fps = 25.0
         self._frame_size = self.OUT_W * self.OUT_H * 3
         self._last_frame = None
+        self._awaiting_first_frame = False
 
         self._pending_seek: Optional[float] = None
         self._seek_timer = QTimer(self)
@@ -193,6 +195,7 @@ class PlaybackEngine(QObject):
                 continue
         parsed.sort(key=lambda x: x["start"])
         self._segments = parsed
+        self._segment_starts = [s["start"] for s in parsed]
         self._segment_idx = -1
         self._position = parsed[0]["start"] if parsed else 0.0
 
@@ -375,7 +378,9 @@ class PlaybackEngine(QObject):
         except Exception:
             pass
 
-        # ★ اول فریم از reader
+        # Never block the GUI waiting for FFmpeg. Keep the previous
+        # frame visible until the reader produces the requested frame.
+        self._awaiting_first_frame = True
         frame = self._get_frame_from_reader()
         try:
             if self._active_trace:
@@ -385,6 +390,7 @@ class PlaybackEngine(QObject):
             pass
 
         if frame is not None:
+            self._awaiting_first_frame = False
             self._emit_rgb(frame)
 
         if was_playing:
@@ -411,10 +417,13 @@ class PlaybackEngine(QObject):
     # Internals
     # ============================================================
     def _find_segment(self, seconds) -> Optional[int]:
-        for i, s in enumerate(self._segments):
-            if s["start"] <= seconds < s["end"]:
-                return i
-        return None
+        if not self._segments:
+            return None
+        i = bisect.bisect_right(self._segment_starts, float(seconds)) - 1
+        if i < 0 or i >= len(self._segments):
+            return None
+        seg = self._segments[i]
+        return i if seg["start"] <= seconds < seg["end"] else None
 
     def _open_segment(self, seg, offset):
         if not self._ffmpeg:
@@ -424,9 +433,10 @@ class PlaybackEngine(QObject):
             return False
 
         vf = (
-            f"scale={self.OUT_W}:{self.OUT_H}:force_original_aspect_ratio=decrease,"
+            f"scale={self.OUT_W}:{self.OUT_H}:"
+            f"force_original_aspect_ratio=decrease:flags=fast_bilinear,"
             f"pad={self.OUT_W}:{self.OUT_H}:(ow-iw)/2:(oh-ih)/2,"
-            f"format=bgr24"
+            f"format=rgb24"
         )
         cmd = [
             self._ffmpeg,
@@ -436,7 +446,7 @@ class PlaybackEngine(QObject):
             "-i", path,
             "-an", "-sn",
             "-vf", vf,
-            "-f", "rawvideo", "-pix_fmt", "bgr24",
+            "-f", "rawvideo", "-pix_fmt", "rgb24",
             "-"
         ]
 
@@ -513,12 +523,11 @@ class PlaybackEngine(QObject):
                 pass
 
     def _get_frame_from_reader(self):
-        """★ فقط از صف reader می‌خواند — بدون I/O در main thread."""
+        """Strictly non-blocking: GUI thread never waits for FFmpeg."""
         r = self._reader
         if r is None:
             return None
-        arr = r.get(timeout=0.05)
-        return arr
+        return r.get(timeout=0.0)
 
     def _emit_rgb(self, bgr_frame):
         try:
@@ -527,7 +536,9 @@ class PlaybackEngine(QObject):
         except Exception:
             pass
         try:
-            rgb = bgr_frame[:, :, ::-1]
+            rgb = bgr_frame
+            if hasattr(rgb, "flags") and not rgb.flags["C_CONTIGUOUS"]:
+                rgb = np.ascontiguousarray(rgb)
         except Exception:
             return
         self._last_frame = rgb
@@ -654,6 +665,7 @@ class PlaybackEngine(QObject):
                 self._position += frame_interval
 
             if got_any and last_frame is not None:
+                self._awaiting_first_frame = False
                 self._emit_rgb(last_frame)
                 self.position_changed.emit(self._position)
 
