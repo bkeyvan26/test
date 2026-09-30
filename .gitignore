@@ -2,30 +2,30 @@
 # K1 VMS — Secret files (NEVER commit)
 # ==========================================
 
-# Data (cameras, users, settings)
+# Runtime data (cameras, users, settings)
 data/
-*.json
-!package.json
-!requirements.json
-
-# Logs
-*.log
-mediamtx.log
 *.pid
 mediamtx.pid
 
-# Test scripts with creds
-brute_password.py
-test_*.py
-diag_*.py
+# Logs
+*.log
 
 # MediaMTX runtime
 mediamtx.yml
-mediamtx.exe
+
+# Test scripts with credentials
+brute_password.py
+test_axis.py
+diag_ffmpeg_test.py
+
+# Secrets
+secrets.py
+.env
+.env.*
 
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
 venv/
 env/
@@ -33,6 +33,7 @@ env/
 # IDE
 .vscode/
 .idea/
+*.swp
 
 # OS
 Thumbs.db

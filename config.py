@@ -42,32 +42,34 @@ MEDIAMTX_API_URL = f"http://{MEDIAMTX_HOST}:{MEDIAMTX_API_PORT}"
 MEDIAMTX_RTSP_URL = f"rtsp://{MEDIAMTX_HOST}:{MEDIAMTX_RTSP_PORT}"
 
 # ============================================================
-# 📡 Live View — Routing
+# 📡 Live View
 # ============================================================
 LIVE_USE_MEDIAMTX = False
 LIVE_RTSP_TRANSPORT = "udp"
 
-# ★ CPU Optimization
+# CPU limits
 LIVE_MAX_SINGLE_READERS = 3
 LIVE_SINGLE_IDLE_SEC = 600
 
-# Prewarm scheduling
+# Prewarm
 LIVE_PREWARM_COALESCE_MS = 600
 LIVE_PREWARM_STAGGER_MS = 200
 LIVE_PREWARM_STUCK_SEC = 30
 LIVE_PREWARM_CONCURRENCY = 1
 LIVE_PREWARM_TOP_N = 3
 
-# ★ فقط برای حالت auto استفاده می‌شود. اگر admin عدد داد، نادیده گرفته می‌شود.
+# ★ فقط در حالت auto استفاده می‌شود. اگر admin عدد داد، نادیده گرفته می‌شود.
 LIVE_SINGLE_FPS_CAP = 15
 
-# ★ Transport per role
-#   True  → TCP (پایدار، جلوگیری از tearing)
-#   False → UDP (سریع‌تر ولی ممکن است packet loss داشته باشد)
+# ★ Transport
+#   True  → همیشه TCP (پایدار، CPU بالاتر)
+#   False → همیشه UDP (سریع، ریسک tearing)
+#   "auto" → TCP برای bitrate بالا، UDP برای بقیه
 LIVE_SINGLE_FORCE_TCP = True
-LIVE_GRID_FORCE_TCP = True    # ★ جدید
+LIVE_GRID_FORCE_TCP = "auto"
+LIVE_GRID_TCP_BITRATE_THRESHOLD = 2000   # kbps
 
-# ★ اگر رزولیشن Main بیش از این بود، برای Live از Sub استفاده کن
+# Auto-Sub برای دوربین‌های سنگین
 LIVE_AUTO_SUB_ABOVE_WIDTH = 1920
 LIVE_AUTO_SUB_ABOVE_HEIGHT = 1080
 
