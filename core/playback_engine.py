@@ -117,13 +117,13 @@ class PlaybackEngine(QObject):
     state_changed = Signal(str)
     segment_changed = Signal(int)
 
-    TICK_MS = 15
+    TICK_MS = 33
     SEEK_DEBOUNCE_MS = 120
     MIN_SPEED = 0.25
     MAX_SPEED = 4.0
-    OUT_W = 960
-    OUT_H = 540
-    MAX_READS_PER_TICK = 3      # ★ کاهش: چون reader خودش buffer دارد
+    OUT_W = 640
+    OUT_H = 360
+    MAX_READS_PER_TICK = 2
     GAP_JUMP_THRESHOLD_SEC = 1.5
 
     def __init__(self, parent=None):
@@ -206,6 +206,14 @@ class PlaybackEngine(QObject):
 
     def get_position(self):
         return self._position
+
+    def set_position_hint(self, seconds):
+        """Set timeline position without opening/decoding a media process."""
+        try:
+            self._position = max(0.0, float(seconds))
+            self.position_changed.emit(self._position)
+        except (TypeError, ValueError):
+            pass
 
     def get_speed(self):
         return self._speed
