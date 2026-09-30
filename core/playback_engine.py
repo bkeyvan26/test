@@ -490,12 +490,14 @@ class PlaybackEngine(QObject):
                 p.stdout.close()
         except Exception:
             pass
+        # Do not block the Qt GUI for a long process shutdown.
+        # stdout is already closed and the reader has been asked to stop.
         try:
             p.terminate()
         except Exception:
             pass
         try:
-            p.wait(timeout=0.5)
+            p.wait(timeout=0.08)
         except Exception:
             try:
                 p.kill()
