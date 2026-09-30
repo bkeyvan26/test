@@ -45,8 +45,8 @@ STATE_FILE = config.DATA_DIR / "live_state.json"
 PREWARM_COALESCE_MS = getattr(config, "LIVE_PREWARM_COALESCE_MS", 600)
 PREWARM_STAGGER_MS = getattr(config, "LIVE_PREWARM_STAGGER_MS", 200)
 PREWARM_STUCK_SEC = getattr(config, "LIVE_PREWARM_STUCK_SEC", 30)
-PREWARM_CONCURRENCY = getattr(config, "LIVE_PREWARM_CONCURRENCY", 1)
-PREWARM_TOP_N = getattr(config, "LIVE_PREWARM_TOP_N", 3)
+PREWARM_CONCURRENCY = getattr(config, "LIVE_PREWARM_CONCURRENCY", 3)
+PREWARM_TOP_N = getattr(config, "LIVE_PREWARM_TOP_N", 8)
 
 
 class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
@@ -58,7 +58,7 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
     SINGLE_IDLE_TIMEOUT_SEC = getattr(config, "LIVE_SINGLE_IDLE_SEC", 600)
     IDLE_CHECK_INTERVAL_MS = 5000
     MAX_PREWARM_SINGLE_READERS = getattr(
-        config, "LIVE_MAX_SINGLE_READERS", 3)
+        config, "LIVE_MAX_SINGLE_READERS", 8)
     STATE_FILE = STATE_FILE
 
     FOCUS_DELAY_MS = 300
@@ -108,6 +108,7 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self._clearing = False
         self._restoring = False
         self._initial_fill_done = False
+        self._page_suspended = False
 
         self._mediamtx_retry = {}
         self._max_mediamtx_retry = 8
@@ -877,6 +878,44 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         if idx is not None:
             self.grid.set_status(idx, text)
         self._refresh_status_list()
+
+    # ============================================================
+    # Page lifecycle. Live decoders must not compete with Playback.
+    def on_hide(self):
+        if self._shutting_down or self._page_suspended:
+            return
+        self._page_suspended = True
+        self._cancel_focus_pause()
+        self._fullscreen_uid = None
+        self._pending_switch = None
+        self._clear_epoch += 1
+        self._prewarm_queue = []
+        self._prewarm_in_flight.clear()
+        self._prewarm_started_at.clear()
+        self._switch_wait_started_at.clear()
+
+        for uid in list(self.single_readers.keys()):
+            self._force_stop_single_reader(uid)
+        for uid in list(self.grid_readers.keys()):
+            self._stop_grid_reader(uid)
+
+        self._single_ready_uids.clear()
+        self._single_ready_walltime.clear()
+        self._reset_focus_state()
+        print("[live] page hidden: all Live decoders suspended")
+
+    def on_show(self):
+        if self._shutting_down:
+            return
+        if self._page_suspended:
+            self._page_suspended = False
+            for uid in list(self.cell_to_uid.values()):
+                if uid:
+                    self._start_grid_reader(uid, _epoch=self._clear_epoch)
+            self._schedule_prewarm_visible()
+            print("[live] page shown: grid restore scheduled")
+        else:
+            self._schedule_prewarm_visible()
 
     def _on_cell_clicked(self, idx):
         return
