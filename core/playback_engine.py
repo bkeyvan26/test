@@ -142,6 +142,8 @@ class PlaybackEngine(QObject):
 
         self._wall_start = 0.0
         self._wall_pos_start = 0.0
+        self._play_clock_last = 0.0
+        self._media_accumulator = 0.0
         self._fps = 25.0
         self._frame_size = self.OUT_W * self.OUT_H * 3
         self._last_frame = None
@@ -247,8 +249,11 @@ class PlaybackEngine(QObject):
             self._apply_seek(self._position, force_pause=True)
         self._is_playing = True
         self._set_state("playing")
-        self._wall_start = time.monotonic()
+        now = time.monotonic()
+        self._wall_start = now
         self._wall_pos_start = self._position
+        self._play_clock_last = now
+        self._media_accumulator = 0.0
         self._tick_timer.start(self.TICK_MS)
 
     def pause(self):
@@ -260,6 +265,8 @@ class PlaybackEngine(QObject):
                 pass
             self._is_playing = False
             self._tick_timer.stop()
+            self._play_clock_last = 0.0
+            self._media_accumulator = 0.0
             self._set_state("paused")
 
     def stop(self):
@@ -291,8 +298,11 @@ class PlaybackEngine(QObject):
             except Exception:
                 pass
         self._speed = s
-        self._wall_start = time.monotonic()
+        now = time.monotonic()
+        self._wall_start = now
         self._wall_pos_start = self._position
+        self._play_clock_last = now
+        self._media_accumulator = 0.0
 
     # ============================================================
     # Seek
@@ -396,8 +406,11 @@ class PlaybackEngine(QObject):
         if was_playing:
             self._is_playing = True
             self._set_state("playing")
-            self._wall_start = time.monotonic()
+            now = time.monotonic()
+            self._wall_start = now
             self._wall_pos_start = self._position
+            self._play_clock_last = now
+            self._media_accumulator = 0.0
             self._tick_timer.start(self.TICK_MS)
         else:
             self._set_state("paused")
@@ -590,8 +603,11 @@ class PlaybackEngine(QObject):
             self._position = nxt["start"]
             self.position_changed.emit(self._position)
             self.segment_changed.emit(nxt_idx)
-            self._wall_start = time.monotonic()
+            now = time.monotonic()
+            self._wall_start = now
             self._wall_pos_start = self._position
+            self._play_clock_last = now
+            self._media_accumulator = 0.0
 
             frame = self._get_frame_from_reader()
             if frame is not None:
@@ -616,8 +632,11 @@ class PlaybackEngine(QObject):
         self._position = nxt["start"]
         self.position_changed.emit(self._position)
         self.segment_changed.emit(nxt_idx)
-        self._wall_start = time.monotonic()
+        now = time.monotonic()
+        self._wall_start = now
         self._wall_pos_start = self._position
+        self._play_clock_last = now
+        self._media_accumulator = 0.0
 
         frame = self._get_frame_from_reader()
         if frame is not None:
@@ -632,29 +651,27 @@ class PlaybackEngine(QObject):
         if not self._is_playing or self._reader is None:
             return
         try:
-            wall_elapsed = time.monotonic() - self._wall_start
-            target_pos = self._wall_pos_start + wall_elapsed * self._speed
-            frame_interval = 1.0 / max(1.0, self._fps)
-            behind = target_pos - self._position
-
-            if behind < frame_interval * 0.4:
+            now = time.monotonic()
+            if self._play_clock_last <= 0.0:
+                self._play_clock_last = now
                 return
 
-            frames_needed = int(behind / frame_interval)
-            if frames_needed < 1:
-                frames_needed = 1
-            if frames_needed > self.MAX_READS_PER_TICK:
-                frames_needed = self.MAX_READS_PER_TICK
+            elapsed = max(0.0, now - self._play_clock_last)
+            self._play_clock_last = now
+            self._media_accumulator += elapsed * self._speed
 
-            self._wall_start = time.monotonic()
-            self._wall_pos_start = target_pos
+            frame_interval = 1.0 / max(1.0, self._fps)
+            frames_needed = int(self._media_accumulator / frame_interval)
+            if frames_needed <= 0:
+                return
+            frames_needed = min(frames_needed, self.MAX_READS_PER_TICK)
 
             last_frame = None
             got_any = False
+            consumed = 0
             for _ in range(frames_needed):
                 frame = self._get_frame_from_reader()
                 if frame is None:
-                    # ★ اگر reader تمام شد → segment بعد
                     if self._reader is not None and self._reader.is_eof():
                         if not self._advance_to_next_segment():
                             return
@@ -662,11 +679,16 @@ class PlaybackEngine(QObject):
                     break
                 last_frame = frame
                 got_any = True
-                self._position += frame_interval
+                consumed += 1
+
+            if consumed:
+                self._media_accumulator = max(
+                    0.0, self._media_accumulator - consumed * frame_interval)
 
             if got_any and last_frame is not None:
                 self._awaiting_first_frame = False
                 self._emit_rgb(last_frame)
+                self._position += consumed * frame_interval
                 self.position_changed.emit(self._position)
 
         except Exception as e:
