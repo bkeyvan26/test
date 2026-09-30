@@ -677,15 +677,27 @@ class PlaybackPage(BasePage):
 
     # ============================================================
     def _on_cam_clicked(self, item):
+        """Single click = select/load camera; never auto-play."""
         uid = item.data(Qt.UserRole)
         if uid is None:
             return
         idx = self.grid.find_cell_by_cam(uid)
-        if idx >= 0:
-            self._pause_other_engines(keep_idx=idx)
+        if idx < 0:
+            idx = self.grid.first_empty_idx()
+            if idx < 0:
+                idx = self.grid.get_active_idx()
+            if idx < 0:
+                return
+            self._load_camera_to_cell(uid, idx)
             self.grid._active_idx = idx
             self.grid._update_active()
-            self._bind_active_cell()
+            return
+        self._pause_other_engines(keep_idx=idx)
+        self.grid._active_idx = idx
+        self.grid._update_active()
+        self._bind_active_cell()
+        self._update_info_panel()
+        self._update_panel_segments()
 
     def _on_cam_double_clicked(self, item):
         uid = item.data(Qt.UserRole)
@@ -1008,8 +1020,6 @@ class PlaybackPage(BasePage):
         job.signals.finished.connect(_done)
         job.signals.failed.connect(_failed)
         self._scan_pool.start(job)
-        except Exception as e:
-            print(f"[playback] reload error: {e}")
 
     def _update_date_label(self, day):
         jy, jm, jd = gregorian_to_jalali(day.year, day.month, day.day)
