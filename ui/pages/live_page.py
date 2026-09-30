@@ -225,6 +225,7 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         v.setSpacing(0)
         self.grid = LiveGrid()
         self.grid.cell_clicked.connect(self._on_cell_clicked)
+        self.grid.cell_hover_entered.connect(self._on_cell_hover_entered)
         self.grid.cell_double_clicked.connect(self._on_cell_double_clicked)
         self.grid.cell_close.connect(self._on_cell_close)
         self.grid.cell_context.connect(self._on_cell_context)
@@ -916,6 +917,23 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             print("[live] page shown: grid restore scheduled")
         else:
             self._schedule_prewarm_visible()
+
+    def _on_cell_hover_entered(self, idx):
+        """Prewarm the exact camera the operator is about to inspect."""
+        uid = self.cell_to_uid.get(idx)
+        if not uid or self._page_suspended or self._fullscreen_uid is not None:
+            return
+        cam = self.cam_manager.get(uid)
+        if cam is None or cam.live_profile_id == cam.grid_profile_id:
+            return
+        if uid in self.single_readers or uid in self._prewarm_in_flight:
+            return
+
+        if uid in self._prewarm_queue:
+            self._prewarm_queue.remove(uid)
+        self._prewarm_queue.insert(0, uid)
+        # Start immediately instead of waiting for the normal 600ms batch.
+        self._drain_prewarm_queue(self._clear_epoch)
 
     def _on_cell_clicked(self, idx):
         return
