@@ -8,7 +8,9 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QWidget, QSlider, QMenu,
     QAbstractItemView
 )
-from PySide6.QtCore import Qt, QTimer, QPoint, QMimeData
+from PySide6.QtCore import (
+    Qt, QTimer, QPoint, QMimeData, QObject, Signal, QRunnable, QThreadPool
+)
 from PySide6.QtGui import QColor, QAction, QDrag
 
 from ui import theme
@@ -33,6 +35,24 @@ import config
 def _fmt_hms(seconds):
     s = max(0, int(seconds))
     return f"{s//3600:02d}:{(s%3600)//60:02d}:{s%60:02d}"
+
+
+class _ScanSignals(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+
+class _ScanJob(QRunnable):
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+        self.signals = _ScanSignals()
+
+    def run(self):
+        try:
+            self.signals.finished.emit(self.fn())
+        except Exception as exc:
+            self.signals.failed.emit(str(exc))
 
 
 class PlaybackCameraList(QListWidget):
@@ -74,6 +94,8 @@ class PlaybackPage(BasePage):
         self._cut_in = None
         self._cut_out = None
         self._scan_cache = {}
+        self._scan_pool = QThreadPool.globalInstance()
+        self._scan_generation = 0
 
         self._build()
         self._load_cameras()
@@ -704,32 +726,42 @@ class PlaybackPage(BasePage):
 
         day = self.calendar.selected_date()
 
-        def _do_scan():
-            try:
-                dates = self._scan_dates(uid)
-                self.calendar.set_recording_dates(dates)
-                segments = self._scan_segments(uid, day)
-                self.grid.assign_to_cell(
-                    cell_idx, uid, cam.name or uid, day, segments)
-                self._pause_other_engines(keep_idx=cell_idx)
-                self._bind_active_cell()
-                self._update_info_panel()
-                self._update_panel_segments()
-                print(f"[playback] loaded {cam.name} in cell "
-                      f"{cell_idx} ({len(segments)} segments)")
-            except Exception as e:
-                print(f"[playback._do_scan] {e}")
-            finally:
-                try:
-                    cell.set_loading(False)
-                except Exception:
-                    pass
-                try:
-                    ActivityBus.instance().hide()
-                except Exception:
-                    pass
+        self._scan_generation += 1
+        generation = self._scan_generation
 
-        QTimer.singleShot(50, _do_scan)
+        def _scan():
+            dates = self._scan_dates(uid)
+            segments = self._scan_segments(uid, day)
+            return dates, segments
+
+        job = _ScanJob(_scan)
+
+        def _done(result):
+            if generation != self._scan_generation:
+                return
+            dates, segments = result
+            self.calendar.set_recording_dates(dates)
+            self.grid.assign_to_cell(
+                cell_idx, uid, cam.name or uid, day, segments)
+            self._pause_other_engines(keep_idx=cell_idx)
+            self._bind_active_cell()
+            self._update_info_panel()
+            self._update_panel_segments()
+            print(f"[playback] loaded {cam.name} in cell "
+                  f"{cell_idx} ({len(segments)} segments)")
+            cell.set_loading(False)
+            ActivityBus.instance().hide()
+
+        def _failed(message):
+            if generation != self._scan_generation:
+                return
+            print(f"[playback.scan] {message}")
+            cell.set_loading(False)
+            ActivityBus.instance().hide()
+
+        job.signals.finished.connect(_done)
+        job.signals.failed.connect(_failed)
+        self._scan_pool.start(job)
 
     # ============================================================
     # Cell interaction
@@ -948,8 +980,15 @@ class PlaybackPage(BasePage):
         cam = self.cam_manager.get(uid)
         if cam is None:
             return
-        try:
-            segments = self._scan_segments(uid, date_obj)
+        self._scan_generation += 1
+        generation = self._scan_generation
+        self.grid.get_cell(idx).set_loading(True, "در حال بارگذاری…")
+
+        job = _ScanJob(lambda: self._scan_segments(uid, date_obj))
+
+        def _done(segments):
+            if generation != self._scan_generation:
+                return
             self.grid.assign_to_cell(
                 idx, uid, cam.name if cam else "", date_obj, segments)
             self._pause_other_engines(keep_idx=idx)
@@ -958,6 +997,17 @@ class PlaybackPage(BasePage):
             self._update_panel_segments()
             self._update_date_label(date_obj)
             print(f"[playback] reloaded cell {idx} for {date_obj}")
+            self.grid.get_cell(idx).set_loading(False)
+
+        def _failed(message):
+            if generation != self._scan_generation:
+                return
+            print(f"[playback] reload error: {message}")
+            self.grid.get_cell(idx).set_loading(False)
+
+        job.signals.finished.connect(_done)
+        job.signals.failed.connect(_failed)
+        self._scan_pool.start(job)
         except Exception as e:
             print(f"[playback] reload error: {e}")
 
