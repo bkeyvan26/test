@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""K1 VMS — Camera dialog (Phase 6.0: async auto-detect with cancellation)"""
+"""K1 VMS — Camera dialog (Phase 6.6: per-role transport)"""
 import urllib.parse
 from typing import List
 
@@ -114,10 +114,9 @@ class CameraDialog(QDialog):
             "➕ افزودن دوربین" if self.is_new
             else f"✏ ویرایش: {self.camera.name}"
         )
-        self.resize(820, 880)
+        self.resize(820, 920)
         self.setStyleSheet(DIALOG_STYLE)
 
-        # ★ Phase 6.0: async auto-detect worker state
         self._detect_thread = None
         self._detect_worker = None
         self._detect_progress = None
@@ -200,7 +199,7 @@ class CameraDialog(QDialog):
         return w
 
     # ------------------------------------------------------------
-    # Tab 2: Streams
+    # Tab 2: Streams (★ includes transport per role)
     # ------------------------------------------------------------
     def _tab_streams(self) -> QWidget:
         w = QWidget()
@@ -251,48 +250,63 @@ class CameraDialog(QDialog):
         row.addStretch(1)
         v.addLayout(row)
 
-        grp_roles = QGroupBox("🎯 چهار نقش مستقل (Stream + FPS)")
+        grp_roles = QGroupBox("🎯 چهار نقش مستقل (Stream + FPS + Transport)")
         gv = QVBoxLayout(grp_roles)
         gv.setSpacing(4)
         gv.setContentsMargins(14, 20, 14, 14)
 
-        self.rec_profile_combo, self.rec_fps_auto, self.rec_fps_spin = \
-            self._make_role_widget(
-                gv, "🎬 ضبط دائم",
-                self.camera.recording_profile_id,
-                int(getattr(self.camera, "recording_fps_note", 0) or 0),
-                "recording"
-            )
+        # ★ Recording — no transport (handled by MediaMTX/NVR)
+        (self.rec_profile_combo, self.rec_fps_auto, self.rec_fps_spin,
+         self.rec_transport_combo) = self._make_role_widget(
+            gv, "🎬 ضبط دائم",
+            self.camera.recording_profile_id,
+            int(getattr(self.camera, "recording_fps_note", 0) or 0),
+            "recording",
+            show_transport=False,
+            transport_value="auto",
+        )
 
-        self.motion_profile_combo, self.motion_fps_auto, self.motion_fps_spin = \
-            self._make_role_widget(
-                gv, "⚠ تشخیص حرکت",
-                self.camera.motion_profile_id,
-                int(getattr(self.camera, "motion_processing_fps", 0) or 0),
-                "motion"
-            )
+        # ★ Motion — no transport (internal detector)
+        (self.motion_profile_combo, self.motion_fps_auto, self.motion_fps_spin,
+         self.motion_transport_combo) = self._make_role_widget(
+            gv, "⚠ تشخیص حرکت",
+            self.camera.motion_profile_id,
+            int(getattr(self.camera, "motion_processing_fps", 0) or 0),
+            "motion",
+            show_transport=False,
+            transport_value="auto",
+        )
 
-        self.live_profile_combo_local, self.live_fps_auto, self.live_fps_spin = \
-            self._make_role_widget(
-                gv, "📺 پخش لایو (تکی)",
-                self.camera.live_profile_id,
-                int(getattr(self.camera, "live_display_fps", 0) or 0),
-                "live"
-            )
+        # ★ Live — with transport
+        (self.live_profile_combo_local, self.live_fps_auto, self.live_fps_spin,
+         self.live_transport_combo) = self._make_role_widget(
+            gv, "📺 پخش لایو (تکی)",
+            self.camera.live_profile_id,
+            int(getattr(self.camera, "live_display_fps", 0) or 0),
+            "live",
+            show_transport=True,
+            transport_value=getattr(self.camera, "live_transport", "auto"),
+        )
 
-        self.grid_profile_combo, self.grid_fps_auto, self.grid_fps_spin = \
-            self._make_role_widget(
-                gv, "🔲 نمای شبکه",
-                self.camera.grid_profile_id,
-                int(getattr(self.camera, "grid_display_fps", 0) or 0),
-                "grid"
-            )
+        # ★ Grid — with transport
+        (self.grid_profile_combo, self.grid_fps_auto, self.grid_fps_spin,
+         self.grid_transport_combo) = self._make_role_widget(
+            gv, "🔲 نمای شبکه",
+            self.camera.grid_profile_id,
+            int(getattr(self.camera, "grid_display_fps", 0) or 0),
+            "grid",
+            show_transport=True,
+            transport_value=getattr(self.camera, "grid_transport", "auto"),
+        )
 
         hint_role = QLabel(
-            "💡 <b>پیشنهاد:</b> ضبط = Main (کیفیت بالا) • حرکت = Sub (کم‌حجم) • "
-            "لایو = Main • شبکه = Sub\n"
-            "📌 در حالت «خودکار»، نرخ فریم از خود دوربین خوانده می‌شود. "
-            "برای کاهش مصرف CPU، تیک خودکار را بردار و مقدار کمتری تنظیم کن."
+            "💡 <b>پیشنهاد:</b> ضبط = Main • حرکت = Sub • لایو = Main • شبکه = Sub\n"
+            "📌 <b>نرخ فریم:</b> «خودکار» = از دوربین خوانده می‌شود. "
+            "برای کاهش CPU، تیک را بردار و عدد کمتر بگذار.\n"
+            "📌 <b>انتقال (Transport):</b>\n"
+            "   • <b>خودکار</b> = اگر بیت‌ریت بالا باشد TCP، وگرنه UDP\n"
+            "   • <b>TCP</b> = پایدارتر (برای دوربین‌های پرنویز/HEVC)\n"
+            "   • <b>UDP</b> = سریع‌تر (برای شبکه سالم)"
         )
         hint_role.setWordWrap(True)
         hint_role.setStyleSheet(
@@ -308,8 +322,13 @@ class CameraDialog(QDialog):
         self._refresh_profiles_list()
         return w
 
+    # ============================================================
+    # Role widget — now with optional transport combo
+    # ============================================================
     def _make_role_widget(self, parent_layout, label, profile_id,
-                           fps_value, role_key):
+                          fps_value, role_key,
+                          show_transport=False,
+                          transport_value="auto"):
         hdr = QLabel(f"<b>{label}</b>")
         hdr.setStyleSheet(
             f"color: {config.COLOR_ACCENT}; font-size: 12px; "
@@ -317,6 +336,7 @@ class CameraDialog(QDialog):
         )
         parent_layout.addWidget(hdr)
 
+        # --- stream row ---
         prow = QHBoxLayout()
         prow.setContentsMargins(20, 0, 0, 0)
         plbl = QLabel("استریم:")
@@ -329,8 +349,9 @@ class CameraDialog(QDialog):
         prow.addWidget(combo, 1)
         parent_layout.addLayout(prow)
 
+        # --- fps row ---
         frow = QHBoxLayout()
-        frow.setContentsMargins(20, 2, 0, 6)
+        frow.setContentsMargins(20, 2, 0, 2)
         flbl = QLabel("نرخ فریم:")
         flbl.setFixedWidth(70)
         flbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -385,7 +406,29 @@ class CameraDialog(QDialog):
         auto_chk.toggled.connect(on_auto_toggle)
         spin.setProperty("_refresh_fn", refresh_from_profile)
 
-        return combo, auto_chk, spin
+        # --- transport row (optional) ---
+        transport_combo = None
+        if show_transport:
+            trow = QHBoxLayout()
+            trow.setContentsMargins(20, 2, 0, 6)
+            tlbl = QLabel("انتقال:")
+            tlbl.setFixedWidth(70)
+            tlbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            trow.addWidget(tlbl)
+
+            transport_combo = QComboBox()
+            transport_combo.setMinimumWidth(200)
+            transport_combo.addItem("🔄 خودکار (هوشمند)", "auto")
+            transport_combo.addItem("🔒 TCP (پایدارتر)", "tcp")
+            transport_combo.addItem("⚡ UDP (سریع‌تر)", "udp")
+            idx = transport_combo.findData(transport_value or "auto")
+            if idx >= 0:
+                transport_combo.setCurrentIndex(idx)
+            trow.addWidget(transport_combo)
+            trow.addStretch(1)
+            parent_layout.addLayout(trow)
+
+        return combo, auto_chk, spin, transport_combo
 
     def _small_btn(self, text):
         b = QPushButton(text)
@@ -615,10 +658,9 @@ class CameraDialog(QDialog):
         return w
 
     # ============================================================
-    # ★ Auto-detect (Phase 6.0: async + cancellable)
+    # ★ Auto-detect (Phase 6.0)
     # ============================================================
     def _on_auto_detect(self):
-        # Prevent double-start
         if self._detect_worker is not None:
             QMessageBox.information(
                 self, "در حال اجرا",
@@ -637,7 +679,6 @@ class CameraDialog(QDialog):
             )
             return
 
-        # ---- Progress dialog ----
         prog = QProgressDialog(
             "شروع تشخیص خودکار...", "لغو", 0, 100, self
         )
@@ -650,7 +691,6 @@ class CameraDialog(QDialog):
         prog.setStyleSheet(DIALOG_STYLE)
         prog.show()
 
-        # ---- Worker + thread ----
         try:
             from core.camera_discovery_worker import AutoDetectWorker
         except Exception as e:
@@ -665,7 +705,6 @@ class CameraDialog(QDialog):
         worker = AutoDetectWorker(ip, user, password)
         worker.moveToThread(thread)
 
-        # ---- Wire signals ----
         thread.started.connect(worker.run)
         worker.log.connect(self._on_detect_log)
         worker.progress.connect(self._on_detect_progress)
@@ -681,7 +720,6 @@ class CameraDialog(QDialog):
         self.auto_detect_btn.setEnabled(False)
         thread.start()
 
-    # ---- worker signal handlers ----
     def _on_detect_log(self, msg):
         try:
             print(msg)
@@ -766,7 +804,6 @@ class CameraDialog(QDialog):
             pass
 
     def _cleanup_detect_worker(self):
-        """Close progress, disconnect worker, stop thread, re-enable button."""
         prog = self._detect_progress
         thread = self._detect_thread
         worker = self._detect_worker
@@ -775,45 +812,22 @@ class CameraDialog(QDialog):
         self._detect_thread = None
         self._detect_worker = None
 
-        # Close progress dialog
         if prog is not None:
-            try:
-                prog.reset()
-            except Exception:
-                pass
-            try:
-                prog.close()
-            except Exception:
-                pass
-            try:
-                prog.deleteLater()
-            except Exception:
-                pass
+            try: prog.reset()
+            except Exception: pass
+            try: prog.close()
+            except Exception: pass
+            try: prog.deleteLater()
+            except Exception: pass
 
-        # Disconnect worker signals
         if worker is not None:
-            try:
-                worker.log.disconnect()
-            except Exception:
-                pass
-            try:
-                worker.progress.disconnect()
-            except Exception:
-                pass
-            try:
-                worker.finished_ok.disconnect()
-            except Exception:
-                pass
-            try:
-                worker.finished_fail.disconnect()
-            except Exception:
-                pass
-            try:
-                worker.cancelled.disconnect()
-            except Exception:
-                pass
+            for sig in ("log", "progress", "finished_ok",
+                        "finished_fail", "cancelled"):
+                try:
+                    getattr(worker, sig).disconnect()
+                except Exception:
+                    pass
 
-        # Stop thread
         if thread is not None:
             try:
                 thread.quit()
@@ -822,20 +836,14 @@ class CameraDialog(QDialog):
                     thread.wait(500)
             except Exception:
                 pass
-            try:
-                thread.deleteLater()
-            except Exception:
-                pass
+            try: thread.deleteLater()
+            except Exception: pass
 
-        # Re-enable button
         try:
             self.auto_detect_btn.setEnabled(True)
         except Exception:
             pass
 
-    # ------------------------------------------------------------
-    # Apply helpers
-    # ------------------------------------------------------------
     def _apply_onvif_profiles(self, profiles: List[dict]):
         self.camera.stream_profiles = []
         for i, pd in enumerate(profiles):
@@ -937,7 +945,7 @@ class CameraDialog(QDialog):
             return ""
 
     # ============================================================
-    # Save
+    # Save (★ now saves transport settings)
     # ============================================================
     def _on_save(self):
         if not self.name_edit.text().strip():
@@ -984,6 +992,21 @@ class CameraDialog(QDialog):
             else self.grid_fps_spin.value()
         )
 
+        # ★ Transport per role
+        if self.live_transport_combo is not None:
+            c.live_transport = (
+                self.live_transport_combo.currentData() or "auto"
+            )
+        else:
+            c.live_transport = "auto"
+
+        if self.grid_transport_combo is not None:
+            c.grid_transport = (
+                self.grid_transport_combo.currentData() or "auto"
+            )
+        else:
+            c.grid_transport = "auto"
+
         c.record_enabled_motion = self.rec_motion_chk.isChecked()
         c.record_enabled_continuous = self.rec_cont_chk.isChecked()
         c.record_segment_minutes = self.rec_seg_spin.value()
@@ -1003,9 +1026,6 @@ class CameraDialog(QDialog):
     def get_camera(self) -> CameraConfig:
         return self.camera
 
-    # ============================================================
-    # ★ Close safety: cancel worker if active
-    # ============================================================
     def closeEvent(self, event):
         if self._detect_worker is not None:
             try:
@@ -1017,7 +1037,7 @@ class CameraDialog(QDialog):
 
 
 # ============================================================
-# StreamProfileDialog
+# StreamProfileDialog (unchanged)
 # ============================================================
 class StreamProfileDialog(QDialog):
     def __init__(self, profile: StreamProfile, camera: CameraConfig,
@@ -1122,7 +1142,6 @@ class StreamProfileDialog(QDialog):
         raw_path = self.path_edit.text().strip()
         p.rtsp_path = raw_path
 
-        # If user pasted a full URL, save it as-is
         if raw_path.lower().startswith(("rtsp://", "rtsps://")):
             p.url = raw_path
         elif raw_path:
@@ -1146,9 +1165,6 @@ class StreamProfileDialog(QDialog):
 
         if not p.discovered_by:
             p.discovered_by = "manual"
-
-        print(f"[profile] saved: name={p.name} "
-              f"path={p.rtsp_path!r} url={_redact(p.url)}")
 
         self.accept()
 

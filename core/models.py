@@ -166,7 +166,12 @@ class CameraConfig:
 
     # Grid Display FPS
     grid_display_fps: int = 0       # 0 = auto (از grid_profile.fps)
-
+    # ★ Transport: "auto" | "tcp" | "udp"
+    #   auto → در کد تصمیم گرفته می‌شود (بر اساس bitrate)
+    #   tcp  → اجبار به TCP (پایدارتر، CPU بالاتر)
+    #   udp  → اجبار به UDP (سریع‌تر، ریسک packet loss)
+    live_transport: str = "auto"
+    grid_transport: str = "auto"
     # Motion Processing FPS (ممکن است کمتر از motion_profile.fps)
     motion_processing_fps: int = 0  # 0 = auto (از motion_profile.fps)
 

@@ -3,9 +3,10 @@
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from ui import theme
 from ui.icons import make_icon
+from ui.activity_bus import ActivityBus
 
 
 # ============================================================
@@ -64,6 +65,76 @@ class StatusPill(QFrame):
 
 
 # ============================================================
+# Activity Indicator (for header) — Phase 6.4
+# ============================================================
+class HeaderActivity(QFrame):
+    """Small pill showing ActivityBus state with blinking dot + text."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("HeaderActivity")
+        self.setFixedHeight(26)
+        self.setVisible(False)
+
+        h = QHBoxLayout(self)
+        h.setContentsMargins(10, 0, 12, 0)
+        h.setSpacing(6)
+
+        self.dot = QLabel("●")
+        self.dot.setFixedSize(14, 14)
+        self.dot.setAlignment(Qt.AlignCenter)
+        self.dot.setStyleSheet(
+            "color: #1abc9c; background: transparent; border: none; "
+            "font-size: 11px;"
+        )
+        h.addWidget(self.dot)
+
+        self.text_lbl = QLabel("")
+        self.text_lbl.setStyleSheet(
+            "color: #ecf0f1; background: transparent; "
+            "font-size: 11px; font-weight: 600; border: none;"
+        )
+        h.addWidget(self.text_lbl)
+
+        self.setStyleSheet("""
+            QFrame#HeaderActivity {
+                background: #1e242e;
+                border: 1px solid #16a085;
+                border-radius: 13px;
+            }
+        """)
+
+        # Blink animation
+        self._on = True
+        self._blink = QTimer(self)
+        self._blink.timeout.connect(self._tick)
+        self._blink.setInterval(500)
+
+        # Connect to bus
+        try:
+            ActivityBus.instance().changed.connect(self._on_activity)
+        except Exception:
+            pass
+
+    def _tick(self):
+        self._on = not self._on
+        color = "#1abc9c" if self._on else "#0e6b58"
+        self.dot.setStyleSheet(
+            f"color: {color}; background: transparent; border: none; "
+            f"font-size: 11px;"
+        )
+
+    def _on_activity(self, active: bool, text: str):
+        if active:
+            self.text_lbl.setText(text or "در حال انجام…")
+            self.show()
+            self._blink.start()
+        else:
+            self._blink.stop()
+            self.hide()
+
+
+# ============================================================
 # Global Header
 # ============================================================
 class GlobalHeader(QFrame):
@@ -110,6 +181,10 @@ class GlobalHeader(QFrame):
 
         self.ai_pill = StatusPill("cpu", "AI Disabled", theme.COLOR_TEXT_SECONDARY)
         h.addWidget(self.ai_pill)
+
+        # ★ Activity indicator (بعد از AI Disabled)
+        self.activity = HeaderActivity(self)
+        h.addWidget(self.activity)
 
         h.addStretch(1)
 

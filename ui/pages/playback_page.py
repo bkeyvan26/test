@@ -1,33 +1,29 @@
 # -*- coding: utf-8 -*-
-"""
-K1 VMS — Playback page (Phase C + trace instrumentation)
-
-Trace instrumentation added (MEASUREMENT ONLY):
-- PLAY_CLICK at _toggle
-- USER_SEEK_CLICK at _on_seek
-- AUTO_LOAD_FIRST_SEGMENT at _reload_for_date
-- FIRST_FRAME_RENDERED + PLAYBACK_USABLE at _on_frame
-"""
+"""K1 VMS — Playback page (Phase 6.7.4: crash-safe)"""
 import datetime
 from pathlib import Path
+
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton, QComboBox,
-    QListWidget, QListWidgetItem, QWidget, QSlider
+    QListWidget, QListWidgetItem, QWidget, QSlider, QMenu,
+    QAbstractItemView
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, QTimer, QPoint, QMimeData
+from PySide6.QtGui import QColor, QAction, QDrag
+
 from ui import theme
 from ui.icons import make_icon
 from ui.pages import BasePage
 from ui.dialogs import info as dlg_info, warning as dlg_warning
 from ui.dialogs.export_dialog import ExportDialog
 from ui.widgets.timeline import TimelineWidget
-from ui.widgets.video_display import VideoDisplay
+from ui.widgets.playback_grid import PlaybackGrid, MIME_PLAYBACK_CAM
 from ui.widgets.persian_calendar import (
     PersianCalendar, gregorian_to_jalali, PERSIAN_MONTHS
 )
+from ui.activity_bus import ActivityBus
+from ui.loading_texts import t as t_load
 from core.camera_manager import CameraManager
-from core.playback_engine import PlaybackEngine
 from core.nvr_engine import _camera_path_name
 from core.recording_indexer import RecordingIndexer, STATE_WRITING
 from core import settings_manager
@@ -39,37 +35,49 @@ def _fmt_hms(seconds):
     return f"{s//3600:02d}:{(s%3600)//60:02d}:{s%60:02d}"
 
 
+class PlaybackCameraList(QListWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragOnly)
+        self.setDefaultDropAction(Qt.CopyAction)
+
+    def startDrag(self, supported_actions):
+        item = self.currentItem()
+        if item is None:
+            return
+        uid = item.data(Qt.UserRole) or ""
+        if not uid:
+            return
+        md = QMimeData()
+        md.setData(MIME_PLAYBACK_CAM, uid.encode("utf-8"))
+        md.setText(uid)
+        drag = QDrag(self)
+        drag.setMimeData(md)
+        try:
+            drag.exec(Qt.CopyAction)
+        except Exception as ex:
+            print(f"[PlaybackCameraList.drag] {ex}")
+
+
 class PlaybackPage(BasePage):
     PAGE_KEY = "playback"
     PAGE_TITLE = "Playback"
-    PANEL_TITLE = "تشخیص حرکت"
+    PANEL_TITLE = "قطعات / تشخیص حرکت"
 
     def __init__(self, nvr_engine=None, parent=None):
         super().__init__(parent)
         self.cam_manager = CameraManager()
         self.nvr = nvr_engine
-        self._current_cam_uid = None
         self.indexer = RecordingIndexer.instance(nvr_engine)
 
         self._cut_in = None
         self._cut_out = None
-
-        self.engine = PlaybackEngine(self)
-        self.engine.frame_ready.connect(self._on_frame)
-        self.engine.position_changed.connect(self._on_position)
-        self.engine.state_changed.connect(self._on_state)
-
-        # ---- trace ----
-        self._current_play_trace = None
+        self._scan_cache = {}
 
         self._build()
         self._load_cameras()
 
-        if self.cam_list.count() > 0:
-            self.cam_list.setCurrentRow(0)
-
-    # ============================================================
-    # UI
     # ============================================================
     def _build(self):
         root = QVBoxLayout(self)
@@ -96,7 +104,7 @@ class PlaybackPage(BasePage):
         )
         h = QHBoxLayout(bar)
         h.setContentsMargins(12, 6, 12, 6)
-        h.setSpacing(10)
+        h.setSpacing(8)
 
         title = QLabel("🎬 Playback")
         title.setStyleSheet(
@@ -104,7 +112,32 @@ class PlaybackPage(BasePage):
             f"font-size: 14px; font-weight: 700;"
         )
         h.addWidget(title)
-        h.addSpacing(20)
+        h.addSpacing(12)
+
+        lay_lbl = QLabel("چیدمان:")
+        lay_lbl.setStyleSheet(
+            f"color: {theme.COLOR_TEXT_SECONDARY}; font-size: 10px;")
+        h.addWidget(lay_lbl)
+
+        self.layout_combo = QComboBox()
+        self.layout_combo.setFixedWidth(90)
+        for label, key in [("۱ کاشی", "1x1"), ("۲ کاشی", "1+1"),
+                           ("۴ کاشی", "2x2"), ("۹ کاشی", "3x3")]:
+            self.layout_combo.addItem(label, key)
+        self.layout_combo.setCurrentIndex(2)
+        self.layout_combo.currentIndexChanged.connect(
+            self._on_layout_changed)
+        self.layout_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: {theme.COLOR_BG_CARD};
+                color: {theme.COLOR_TEXT_PRIMARY};
+                border: 1px solid {theme.COLOR_BORDER};
+                border-radius: 5px;
+                padding: 3px 8px; font-size: 11px;
+            }}
+        """)
+        h.addWidget(self.layout_combo)
+        h.addSpacing(12)
 
         self.prev_day_btn = QPushButton("‹")
         self.prev_day_btn.setFixedSize(28, 26)
@@ -182,7 +215,7 @@ class PlaybackPage(BasePage):
         """)
         v.addWidget(title)
 
-        self.cam_list = QListWidget()
+        self.cam_list = PlaybackCameraList()
         self.cam_list.setStyleSheet(f"""
             QListWidget {{
                 background: {theme.COLOR_BG_DARK};
@@ -196,8 +229,19 @@ class PlaybackPage(BasePage):
                 background: {theme.COLOR_ACCENT}; color: white;
             }}
         """)
-        self.cam_list.currentItemChanged.connect(self._on_camera_selected)
+        self.cam_list.itemDoubleClicked.connect(self._on_cam_double_clicked)
+        self.cam_list.itemClicked.connect(self._on_cam_clicked)
         v.addWidget(self.cam_list, 1)
+
+        hint = QLabel(
+            "• دابل کلیک: کاشی خالی بعدی\n"
+            "• Drag روی کاشی: همان کاشی\n"
+            "• دابل کلیک روی کاشی: تک‌صفحه\n"
+            "• 💡 فقط کاشی فعال پخش می‌شود")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(
+            f"color: {theme.COLOR_TEXT_MUTED}; font-size: 10px; padding: 4px;")
+        v.addWidget(hint)
 
         return panel
 
@@ -208,12 +252,18 @@ class PlaybackPage(BasePage):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
 
-        self.video = VideoDisplay()
-        self.video.set_placeholder("Select a camera to begin")
-        self.video.zoom_changed.connect(self._on_video_zoom_changed)
-        v.addWidget(self.video, 1)
+        self.grid = PlaybackGrid()
+        self.grid.set_layout("2x2")
+        self.grid.cell_clicked.connect(self._on_cell_clicked)
+        self.grid.cell_double_clicked.connect(self._on_cell_double_clicked)
+        self.grid.cell_context.connect(self._on_cell_context)
+        self.grid.camera_dropped.connect(self._on_camera_dropped)
+        self.grid.cell_state.connect(self._on_cell_state)
+        self.grid.cell_position.connect(self._on_cell_position)
+        self.grid.fullscreen_about_to_change.connect(
+            self._on_fs_about_to_change)
+        v.addWidget(self.grid, 1)
 
-        # Toolbar
         toolbar = QFrame()
         toolbar.setFixedHeight(42)
         toolbar.setStyleSheet(f"""
@@ -226,17 +276,13 @@ class PlaybackPage(BasePage):
         th.setContentsMargins(8, 4, 8, 4)
         th.setSpacing(4)
 
-        self.btn_layout = self._small_btn("grid", "چیدمان شبکه")
-        self.btn_layout.clicked.connect(self._cycle_layout)
-        th.addWidget(self.btn_layout)
-
-        self.btn_close = self._small_btn("x", "بستن دوربین فعال")
-        self.btn_close.clicked.connect(self._close_active)
+        self.btn_close = self._small_btn("x", "بستن کاشی فعال")
+        self.btn_close.clicked.connect(self._close_active_cell)
         th.addWidget(self.btn_close)
 
-        self.btn_snap_toolbar = self._small_btn("camera", "عکس فوری")
-        self.btn_snap_toolbar.clicked.connect(self._on_snapshot)
-        th.addWidget(self.btn_snap_toolbar)
+        self.btn_snap = self._small_btn("camera", "عکس فوری")
+        self.btn_snap.clicked.connect(self._on_snapshot)
+        th.addWidget(self.btn_snap)
 
         th.addSpacing(8)
         th.addWidget(self._vsep())
@@ -316,8 +362,8 @@ class PlaybackPage(BasePage):
         th.addWidget(self._vsep())
         th.addSpacing(8)
 
-        self.btn_cut = self._small_btn(
-            "edit", "برش: کلیک ۱ = شروع، کلیک ۲ = پایان")
+        self.btn_cut = self._small_btn("edit",
+                                       "برش: کلیک ۱ = شروع، کلیک ۲ = پایان")
         self.btn_cut.clicked.connect(self._on_cut_clicked)
         th.addWidget(self.btn_cut)
 
@@ -333,9 +379,16 @@ class PlaybackPage(BasePage):
         self.btn_export.clicked.connect(self._open_export_dialog)
         th.addWidget(self.btn_export)
 
-        self.btn_fs = self._small_btn("maximize", "تمام‌صفحه")
-        self.btn_fs.clicked.connect(self._toggle_fullscreen)
+        # ★ دو دکمه fullscreen جدا
+        self.btn_fs = self._small_btn("maximize",
+                                      "کاشی فعال — تمام‌صفحه")
+        self.btn_fs.clicked.connect(self._toggle_active_cell_fullscreen)
         th.addWidget(self.btn_fs)
+
+        self.btn_app_fs = self._small_btn("maximize-2",
+                                          "کل برنامه — تمام‌صفحه (F11)")
+        self.btn_app_fs.clicked.connect(self._toggle_app_fullscreen)
+        th.addWidget(self.btn_app_fs)
 
         v.addWidget(toolbar)
         return center
@@ -402,7 +455,7 @@ class PlaybackPage(BasePage):
 
         v.addSpacing(4)
 
-        info_title = QLabel("اطلاعات")
+        info_title = QLabel("اطلاعات کاشی فعال")
         info_title.setStyleSheet(cal_title.styleSheet())
         v.addWidget(info_title)
 
@@ -470,8 +523,6 @@ class PlaybackPage(BasePage):
         return wrap
 
     # ============================================================
-    # Helpers
-    # ============================================================
     def _nav_qss(self):
         return f"""
             QPushButton {{
@@ -517,8 +568,6 @@ class PlaybackPage(BasePage):
         return l
 
     # ============================================================
-    # Cameras
-    # ============================================================
     def _load_cameras(self):
         self.cam_list.blockSignals(True)
         self.cam_list.clear()
@@ -529,20 +578,28 @@ class PlaybackPage(BasePage):
         self.cam_list.blockSignals(False)
 
     # ============================================================
-    # Scanning
-    # ============================================================
-    def _scan_recording_dates(self, cam_uid):
+    def _scan_dates(self, cam_uid):
+        if cam_uid in self._scan_cache:
+            return self._scan_cache[cam_uid]["dates"]
         cam = self.cam_manager.get(cam_uid)
         if cam is None:
             return set()
         name = _camera_path_name(cam)
         try:
-            return self.indexer.get_recording_dates(name)
+            dates = self.indexer.get_recording_dates(name)
         except Exception as e:
             print(f"[playback] dates scan error: {e}")
-            return set()
+            dates = set()
+        self._scan_cache.setdefault(cam_uid, {})["dates"] = dates
+        self._scan_cache[cam_uid].setdefault("days", {})
+        return dates
 
     def _scan_segments(self, cam_uid, day):
+        cache = self._scan_cache.get(cam_uid, {})
+        days = cache.get("days", {})
+        if day in days:
+            return days[day]
+
         cam = self.cam_manager.get(cam_uid)
         if cam is None:
             return []
@@ -576,174 +633,357 @@ class PlaybackPage(BasePage):
                 "height": seg.height,
                 "fps": seg.fps,
             })
+        self._scan_cache.setdefault(cam_uid, {})["days"] = days
+        days[day] = out
         return out
 
     # ============================================================
-    # Selection
+    # ★ Single-active (defensive)
     # ============================================================
-    def _on_camera_selected(self, current, previous):
-        if current is None:
-            return
-        self._current_cam_uid = current.data(Qt.UserRole)
-        cam = self.cam_manager.get(self._current_cam_uid)
-        dates = self._scan_recording_dates(self._current_cam_uid)
-        self.calendar.set_recording_dates(dates)
-        self.info_rows["camera"].setText(cam.name if cam else "—")
-        self._reload_for_date()
+    def _pause_other_engines(self, keep_idx):
+        for i, cell in enumerate(self.grid.get_cells()):
+            if i == keep_idx:
+                continue
+            try:
+                eng = cell.engine()
+                if eng is not None and hasattr(eng, "pause"):
+                    eng.pause()
+            except RuntimeError:
+                pass
+            except Exception as ex:
+                print(f"[pause_other {i}] {ex}")
 
-    def _reload_for_date(self):
-        uid = self._current_cam_uid
+    # ============================================================
+    def _on_cam_clicked(self, item):
+        uid = item.data(Qt.UserRole)
         if uid is None:
             return
-        day = self.calendar.selected_date()
-        jy, jm, jd = gregorian_to_jalali(day.year, day.month, day.day)
-        self.date_lbl.setText(
-            f"{day.strftime('%Y-%m-%d')} — {jd} {PERSIAN_MONTHS[jm-1]} {jy}"
-        )
-        self.info_rows["date"].setText(day.strftime("%Y-%m-%d"))
-        segments = self._scan_segments(uid, day)
-        self.timeline.set_segments(segments)
-        self.engine.stop()
-        self.engine.set_segments(segments)
-        self.info_rows["count"].setText(f"{len(segments)} قطعه")
+        idx = self.grid.find_cell_by_cam(uid)
+        if idx >= 0:
+            self._pause_other_engines(keep_idx=idx)
+            self.grid._active_idx = idx
+            self.grid._update_active()
+            self._bind_active_cell()
 
-        if not segments:
-            self.video.set_placeholder(f"No recordings on {day}")
-            self.header_time_lbl.setText("--:--:-- / --:--:--")
-            self.time_lbl.setText("--:--:-- / --:--:--")
-            self.info_rows["time"].setText("—")
-        else:
-            first = segments[0]["start"]
-            # ---- trace ----
-            try:
-                from core.trace import new_trace
-                cam = self.cam_manager.get(uid)
-                cam_name = cam.name if cam else ""
-                t = new_trace("PLAY", camera=cam_name)
-                t.mark("AUTO_LOAD_FIRST_SEGMENT", target=f"{first:.2f}")
-                self.engine.set_active_trace(t)
-                self._current_play_trace = t
-            except Exception:
-                pass
-            # ---- end trace ----
-            self.engine.seek(first)
-            self._update_panel_segments()
-
-    def _on_calendar_date_selected(self, date_obj):
-        self._reload_for_date()
-
-    def _shift_day(self, delta):
-        d = self.calendar.selected_date() + datetime.timedelta(days=delta)
-        self.calendar.set_selected_date(d)
-        self._reload_for_date()
-
-    def _go_today(self):
-        self.calendar.set_selected_date(datetime.date.today())
-        self._reload_for_date()
-
-    # ============================================================
-    # Player controls
-    # ============================================================
-    def _toggle(self):
-        if not self.engine.has_content():
+    def _on_cam_double_clicked(self, item):
+        uid = item.data(Qt.UserRole)
+        if uid is None:
             return
-        # ---- trace (only when starting playback) ----
+        idx = self.grid.find_cell_by_cam(uid)
+        if idx >= 0:
+            self._pause_other_engines(keep_idx=idx)
+            self.grid._active_idx = idx
+            self.grid._update_active()
+            self._bind_active_cell()
+            return
+        target = self.grid.first_empty_idx()
+        if target < 0:
+            target = self.grid.get_active_idx()
+        self._load_camera_to_cell(uid, target)
+
+    def _on_camera_dropped(self, cell_idx, uid):
+        self._load_camera_to_cell(uid, cell_idx)
+
+    def _load_camera_to_cell(self, uid, cell_idx):
+        cam = self.cam_manager.get(uid)
+        if cam is None:
+            return
+
+        cell = self.grid.get_cell(cell_idx)
+        if cell is None:
+            return
+
+        cell.set_loading(True, t_load("playback_scan",
+                                       camera=cam.name))
+
         try:
-            if not self.engine.is_playing():
-                from core.trace import new_trace
-                cam = self.cam_manager.get(self._current_cam_uid) if self._current_cam_uid else None
-                cam_name = cam.name if cam else ""
-                t = new_trace("PLAY", camera=cam_name)
-                t.mark("PLAY_CLICK")
-                self.engine.set_active_trace(t)
-                self._current_play_trace = t
+            ActivityBus.instance().show(
+                t_load("playback_scan", camera=cam.name or ""))
         except Exception:
             pass
-        # ---- end trace ----
-        self.engine.toggle()
+
+        day = self.calendar.selected_date()
+
+        def _do_scan():
+            try:
+                dates = self._scan_dates(uid)
+                self.calendar.set_recording_dates(dates)
+                segments = self._scan_segments(uid, day)
+                self.grid.assign_to_cell(
+                    cell_idx, uid, cam.name or uid, day, segments)
+                self._pause_other_engines(keep_idx=cell_idx)
+                self._bind_active_cell()
+                self._update_info_panel()
+                self._update_panel_segments()
+                print(f"[playback] loaded {cam.name} in cell "
+                      f"{cell_idx} ({len(segments)} segments)")
+            except Exception as e:
+                print(f"[playback._do_scan] {e}")
+            finally:
+                try:
+                    cell.set_loading(False)
+                except Exception:
+                    pass
+                try:
+                    ActivityBus.instance().hide()
+                except Exception:
+                    pass
+
+        QTimer.singleShot(50, _do_scan)
+
+    # ============================================================
+    # Cell interaction
+    # ============================================================
+    def _on_cell_clicked(self, idx):
+        self._pause_other_engines(keep_idx=idx)
+        self._bind_active_cell()
+        self._update_info_panel()
+        self._update_panel_segments()
+
+    def _on_cell_double_clicked(self, idx):
+        """فقط active_idx را sync کن. pause از _on_fs_about_to_change."""
+        self.grid._active_idx = idx
+        self.grid._update_active()
+        self._bind_active_cell()
+
+    def _on_fs_about_to_change(self, idx):
+        if idx >= 0:
+            self._pause_other_engines(keep_idx=idx)
+
+    def _on_cell_context(self, idx, global_pos):
+        cell = self.grid.get_cell(idx)
+        if cell is None:
+            return
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background: {theme.COLOR_BG_CARD};
+                color: {theme.COLOR_TEXT_PRIMARY};
+                border: 1px solid {theme.COLOR_BORDER};
+                padding: 4px;
+            }}
+            QMenu::item {{ padding: 6px 20px; border-radius: 3px; }}
+            QMenu::item:selected {{ background: {theme.COLOR_ACCENT}; }}
+        """)
+
+        if cell.cam_uid():
+            act_close = QAction("بستن کاشی", self)
+            act_close.triggered.connect(lambda: self._close_cell(idx))
+            menu.addAction(act_close)
+
+            act_snap = QAction("عکس فوری", self)
+            act_snap.triggered.connect(self._on_snapshot)
+            menu.addAction(act_snap)
+
+            if self.grid.is_fullscreen():
+                act_exit = QAction("خروج از تمام‌صفحه", self)
+                act_exit.triggered.connect(self.grid.exit_fullscreen)
+                menu.addAction(act_exit)
+            else:
+                act_fs = QAction("تمام‌صفحه کاشی", self)
+                act_fs.triggered.connect(
+                    lambda: self._toggle_active_cell_fullscreen())
+                menu.addAction(act_fs)
+
+            menu.addSeparator()
+
+            act_export = QAction("خروجی...", self)
+            act_export.triggered.connect(self._open_export_dialog)
+            menu.addAction(act_export)
+        else:
+            act_help = QAction("برای بارگذاری، دوربین را drag کن", self)
+            act_help.setEnabled(False)
+            menu.addAction(act_help)
+
+        menu.exec(global_pos)
+
+    def _close_cell(self, idx):
+        self.grid.clear_cell(idx)
+        if self.grid.get_active_idx() == idx:
+            self._bind_active_cell()
+            self._update_info_panel()
+            self._update_panel_segments()
+
+    def _close_active_cell(self):
+        idx = self.grid.get_active_idx()
+        self._close_cell(idx)
+
+    # ============================================================
+    def _bind_active_cell(self):
+        cell = self.grid.get_active_cell()
+        if cell is None:
+            self.timeline.set_segments([])
+            return
+        self.timeline.set_segments(cell.segments())
+        try:
+            pos = cell.engine().get_position()
+            self.timeline.set_playhead(pos)
+            total = cell.engine().get_total_duration()
+            txt = f"{_fmt_hms(pos)} / {_fmt_hms(total)}"
+            self.time_lbl.setText(txt)
+            self.header_time_lbl.setText(txt)
+        except Exception:
+            pass
+
+    def _update_info_panel(self):
+        cell = self.grid.get_active_cell()
+        if cell is None or not cell.cam_uid():
+            self.info_rows["camera"].setText("—")
+            self.info_rows["date"].setText("—")
+            self.info_rows["time"].setText("—")
+            self.info_rows["count"].setText("—")
+            return
+        self.info_rows["camera"].setText(cell.cam_name())
+        if cell.day():
+            self.info_rows["date"].setText(cell.day().strftime("%Y-%m-%d"))
+        self.info_rows["count"].setText(f"{len(cell.segments())} قطعه")
+
+    def _on_layout_changed(self, idx):
+        key = self.layout_combo.itemData(idx)
+        if key:
+            self.grid.set_layout(key)
+
+    # ============================================================
+    def _active_engine(self):
+        cell = self.grid.get_active_cell()
+        return cell.engine() if cell else None
+
+    def _toggle(self):
+        eng = self._active_engine()
+        if eng is None or not eng.has_content():
+            return
+        self._pause_other_engines(keep_idx=self.grid.get_active_idx())
+        try:
+            if not eng.is_playing():
+                from core.trace import new_trace
+                cell = self.grid.get_active_cell()
+                cam_name = cell.cam_name() if cell else ""
+                t = new_trace("PLAY", camera=cam_name)
+                t.mark("PLAY_CLICK")
+                eng.set_active_trace(t)
+        except Exception:
+            pass
+        eng.toggle()
 
     def _stop(self):
-        self.engine.stop()
-        self.video.set_placeholder("Stopped")
+        eng = self._active_engine()
+        if eng:
+            eng.stop()
 
     def _step(self, direction):
-        self.engine.pause()
-        self.engine.step_frame(direction)
+        eng = self._active_engine()
+        if eng:
+            eng.pause()
+            eng.step_frame(direction)
 
     def _prev_segment(self):
-        idx = self.engine._segment_idx
+        eng = self._active_engine()
+        if eng is None:
+            return
+        idx = eng._segment_idx
         if idx > 0:
-            segs = self.engine.get_segments()
-            self.engine.seek(segs[idx - 1]["start"])
+            segs = eng.get_segments()
+            eng.seek(segs[idx - 1]["start"])
 
     def _next_segment(self):
-        idx = self.engine._segment_idx
-        segs = self.engine.get_segments()
+        eng = self._active_engine()
+        if eng is None:
+            return
+        idx = eng._segment_idx
+        segs = eng.get_segments()
         if idx < len(segs) - 1:
-            self.engine.seek(segs[idx + 1]["start"])
+            eng.seek(segs[idx + 1]["start"])
 
     def _on_speed_slider(self, value):
         speed_map = {0: 0.5, 1: 1.0, 2: 2.0, 3: 3.0, 4: 4.0}
         s = speed_map.get(value, 1.0)
         self.speed_lbl.setText(f"{s:g}x")
-        self.engine.set_speed(s)
+        eng = self._active_engine()
+        if eng:
+            eng.set_speed(s)
 
     def _on_seek(self, seconds):
-        # ---- trace ----
+        eng = self._active_engine()
+        if eng is None:
+            return
+        self._pause_other_engines(keep_idx=self.grid.get_active_idx())
         try:
             from core.trace import new_trace
-            cam = self.cam_manager.get(self._current_cam_uid) if self._current_cam_uid else None
-            cam_name = cam.name if cam else ""
+            cell = self.grid.get_active_cell()
+            cam_name = cell.cam_name() if cell else ""
             t = new_trace("SEEK", camera=cam_name)
             t.mark("USER_SEEK_CLICK", target=f"{float(seconds):.2f}")
-            self.engine.set_active_trace(t)
-            self._current_play_trace = t
+            eng.set_active_trace(t)
         except Exception:
             pass
-        # ---- end trace ----
-        self.engine.request_seek(seconds)
+        eng.request_seek(seconds)
 
-    def _on_frame(self, rgb):
-        if rgb is None:
-            self.video.set_placeholder("— NO RECORDING —")
+    def _on_cell_state(self, idx, state):
+        if idx != self.grid.get_active_idx():
             return
-        self.video.set_frame(rgb)
-        # ---- trace ----
-        try:
-            t = self.engine.get_active_trace()
-            if t is not None and not t.is_ended():
-                t.mark("FIRST_FRAME_RENDERED")
-                t.end("PLAYBACK_USABLE")
-                self.engine.clear_active_trace()
-                self._current_play_trace = None
-        except Exception:
-            pass
-        # ---- end trace ----
+        if state == "playing":
+            self.btn_play.setIcon(make_icon("pause", "white", 20))
+        elif state in ("ended", "gap", "idle"):
+            self.btn_play.setIcon(make_icon("play-circle", "white", 20))
 
-    def _on_position(self, seconds):
+    def _on_cell_position(self, idx, seconds):
+        if idx != self.grid.get_active_idx():
+            return
         self.timeline.set_playhead(seconds)
-        total = self.engine.get_total_duration()
+        eng = self._active_engine()
+        total = eng.get_total_duration() if eng else 0
         txt = f"{_fmt_hms(seconds)} / {_fmt_hms(total)}"
         self.time_lbl.setText(txt)
         self.header_time_lbl.setText(txt)
         self.info_rows["time"].setText(_fmt_hms(seconds))
 
-    def _on_state(self, state):
-        if state == "playing":
-            self.btn_play.setIcon(make_icon("pause", "white", 20))
-            if getattr(self.video, "_image", None) is None:
-                self.video.set_placeholder("Loading…")
-        elif state == "gap":
-            self.btn_play.setIcon(make_icon("play-circle", "white", 20))
-            self.video.set_placeholder("— NO RECORDING —")
-        elif state == "ended":
-            self.btn_play.setIcon(make_icon("play-circle", "white", 20))
-            self.video.set_placeholder("— END OF RECORDING —")
-        else:
-            self.btn_play.setIcon(make_icon("play-circle", "white", 20))
+    # ============================================================
+    def _on_calendar_date_selected(self, date_obj):
+        idx = self.grid.get_active_idx()
+        cell = self.grid.get_cell(idx)
+        if cell is None or not cell.cam_uid():
+            self._update_date_label(date_obj)
+            return
+        uid = cell.cam_uid()
+        cam = self.cam_manager.get(uid)
+        if cam is None:
+            return
+        try:
+            segments = self._scan_segments(uid, date_obj)
+            self.grid.assign_to_cell(
+                idx, uid, cam.name if cam else "", date_obj, segments)
+            self._pause_other_engines(keep_idx=idx)
+            self._bind_active_cell()
+            self._update_info_panel()
+            self._update_panel_segments()
+            self._update_date_label(date_obj)
+            print(f"[playback] reloaded cell {idx} for {date_obj}")
+        except Exception as e:
+            print(f"[playback] reload error: {e}")
 
+    def _update_date_label(self, day):
+        jy, jm, jd = gregorian_to_jalali(day.year, day.month, day.day)
+        self.date_lbl.setText(
+            f"{day.strftime('%Y-%m-%d')} — "
+            f"{jd} {PERSIAN_MONTHS[jm-1]} {jy}"
+        )
+
+    def _shift_day(self, delta):
+        d = self.calendar.selected_date() + datetime.timedelta(days=delta)
+        self.calendar.set_selected_date(d)
+        self._on_calendar_date_selected(d)
+
+    def _go_today(self):
+        d = datetime.date.today()
+        self.calendar.set_selected_date(d)
+        self._on_calendar_date_selected(d)
+
+    # ============================================================
     def _on_snapshot(self):
-        img = getattr(self.video, "_image", None)
+        cell = self.grid.get_active_cell()
+        if cell is None:
+            return
+        img = getattr(cell.video, "_image", None)
         if img is None:
             dlg_info(self, "No frame to save.")
             return
@@ -757,48 +997,25 @@ class PlaybackPage(BasePage):
         except Exception as e:
             dlg_warning(self, f"Snapshot failed:\n{e}")
 
-    def _on_video_zoom_changed(self, is_zoomed):
-        pass
-
-    # ============================================================
-    # Cut button
-    # ============================================================
     def _on_cut_clicked(self):
+        eng = self._active_engine()
+        if eng is None:
+            return
         if self._cut_in is None:
-            self._cut_in = self.engine.get_position()
+            self._cut_in = eng.get_position()
             self._cut_out = None
             self._update_range_lbl()
-            self.btn_cut.setStyleSheet(f"""
-                QPushButton {{
-                    background: {theme.COLOR_ACCENT};
-                    border: 1px solid {theme.COLOR_ACCENT};
-                    border-radius: 6px;
-                }}
-            """)
             return
-
-        self._cut_out = self.engine.get_position()
+        self._cut_out = eng.get_position()
         if self._cut_out <= self._cut_in:
             dlg_info(self, "پایان باید بعد از شروع باشد.")
             self._cut_out = None
             return
-
         self._update_range_lbl()
         self._open_export_dialog()
-
         self._cut_in = None
         self._cut_out = None
         self._update_range_lbl()
-        self.btn_cut.setStyleSheet(f"""
-            QPushButton {{
-                background: {theme.COLOR_BG_PANEL};
-                border: 1px solid {theme.COLOR_BORDER};
-                border-radius: 6px;
-            }}
-            QPushButton:hover {{
-                background: {theme.COLOR_BG_HOVER};
-            }}
-        """)
 
     def _update_range_lbl(self):
         if self._cut_in is None:
@@ -809,20 +1026,20 @@ class PlaybackPage(BasePage):
             txt += f" → OUT {_fmt_hms(self._cut_out)}"
         self.range_lbl.setText(txt)
 
-    # ============================================================
-    # Export
-    # ============================================================
     def _open_export_dialog(self):
-        if self._current_cam_uid is None:
-            dlg_info(self, "ابتدا یک دوربین انتخاب کنید.")
+        cell = self.grid.get_active_cell()
+        if cell is None or not cell.cam_uid():
+            dlg_info(self, "ابتدا یک دوربین روی کاشی بارگذاری کنید.")
             return
-        cam = self.cam_manager.get(self._current_cam_uid)
-        day = self.calendar.selected_date()
-        segments = self._scan_segments(self._current_cam_uid, day)
+        uid = cell.cam_uid()
+        cam = self.cam_manager.get(uid)
+        day = cell.day() or self.calendar.selected_date()
+        segments = cell.segments()
         if not segments:
             dlg_info(self, "برای این روز ضبطی وجود ندارد.")
             return
 
+        eng = self._active_engine()
         if self._cut_in is not None and self._cut_out is not None:
             start_sec = int(self._cut_in)
             end_sec = int(self._cut_out)
@@ -830,7 +1047,7 @@ class PlaybackPage(BasePage):
             start_sec = int(self._cut_in)
             end_sec = min(86400, start_sec + 300)
         else:
-            pos = int(self.engine.get_position())
+            pos = int(eng.get_position()) if eng else 0
             start_sec = max(0, pos - 30)
             end_sec = min(86400, pos + 300)
 
@@ -845,16 +1062,23 @@ class PlaybackPage(BasePage):
         dlg.exec()
 
     # ============================================================
-    # Layout / Fullscreen / Close
-    # ============================================================
-    def _cycle_layout(self):
-        dlg_info(self, "چیدمان چند کاشی در فاز بعدی اضافه می‌شود.")
+    def _toggle_active_cell_fullscreen(self):
+        if self.grid.is_fullscreen():
+            self.grid.exit_fullscreen()
+            return
+        idx = self.grid.get_active_idx()
+        cell = self.grid.get_cell(idx)
+        if cell is None or not cell.cam_uid():
+            for i, c in enumerate(self.grid.get_cells()):
+                if c.cam_uid():
+                    idx = i
+                    break
+            else:
+                return
+        self._pause_other_engines(keep_idx=idx)
+        self.grid.toggle_fullscreen(idx)
 
-    def _close_active(self):
-        self.engine.stop()
-        self.video.set_placeholder("Closed")
-
-    def _toggle_fullscreen(self):
+    def _toggle_app_fullscreen(self):
         w = self.window()
         if w.isFullScreen():
             w.showNormal()
@@ -862,15 +1086,13 @@ class PlaybackPage(BasePage):
             w.showFullScreen()
 
     # ============================================================
-    # Context panel
-    # ============================================================
     def build_panel_content(self):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(10, 10, 10, 10)
         v.setSpacing(8)
 
-        t = QLabel("قطعات / تشخیص حرکت")
+        t = QLabel("قطعات کاشی فعال")
         t.setStyleSheet(f"""
             color: {theme.COLOR_TEXT_SECONDARY};
             font-size: 10px; font-weight: 700; letter-spacing: 1.2px;
@@ -925,19 +1147,18 @@ class PlaybackPage(BasePage):
     def _update_panel_segments(self):
         if not hasattr(self, "_panel_list"):
             return
-        uid = self._current_cam_uid
-        if uid is None:
+        cell = self.grid.get_active_cell()
+        if cell is None or not cell.cam_uid():
             self._panel_cam_lbl.setText("—")
             self._panel_date_lbl.setText("—")
             self._panel_list.clear()
             self._panel_summary.setText("—")
             return
 
-        cam = self.cam_manager.get(uid)
-        day = self.calendar.selected_date()
-        self._panel_cam_lbl.setText(cam.name if cam else "—")
-        self._panel_date_lbl.setText(day.strftime("%Y-%m-%d"))
-        segments = self._scan_segments(uid, day)
+        self._panel_cam_lbl.setText(cell.cam_name())
+        if cell.day():
+            self._panel_date_lbl.setText(cell.day().strftime("%Y-%m-%d"))
+        segments = cell.segments()
         self._panel_list.clear()
 
         total_dur = 0
@@ -968,38 +1189,34 @@ class PlaybackPage(BasePage):
             )
 
     def _on_panel_segment_clicked(self, item):
+        eng = self._active_engine()
+        if eng is None:
+            return
         try:
             start = item.data(Qt.UserRole)
-            self.engine.seek(float(start))
+            self._pause_other_engines(keep_idx=self.grid.get_active_idx())
+            eng.seek(float(start))
         except Exception:
             pass
 
     # ============================================================
-    # Lifecycle
-    # ============================================================
     def on_show(self):
         try:
             self.cam_manager.reload()
-        except Exception as e:
-            print(f"[playback] reload cameras: {e}")
-
-        prev_uid = self._current_cam_uid
+        except Exception:
+            pass
         self._load_cameras()
-        restored = False
-        if prev_uid:
-            for i in range(self.cam_list.count()):
-                it = self.cam_list.item(i)
-                if it and it.data(Qt.UserRole) == prev_uid:
-                    self.cam_list.setCurrentRow(i)
-                    restored = True
-                    break
-        if not restored and self.cam_list.count() > 0:
-            self.cam_list.setCurrentRow(0)
-
-        self._update_panel_segments()
+        cell = self.grid.get_active_cell()
+        if cell and cell.cam_uid():
+            self._bind_active_cell()
+            self._update_info_panel()
 
     def on_hide(self):
-        self.engine.pause()
+        for c in self.grid.get_cells():
+            try:
+                c.engine().pause()
+            except Exception:
+                pass
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Space:
@@ -1008,5 +1225,12 @@ class PlaybackPage(BasePage):
             self._step(-1)
         elif event.key() == Qt.Key_Right:
             self._step(1)
+        elif event.key() == Qt.Key_Escape:
+            if self.grid.is_fullscreen():
+                self.grid.exit_fullscreen()
+            elif self.window().isFullScreen():
+                self.window().showNormal()
+        elif event.key() == Qt.Key_F11:
+            self._toggle_app_fullscreen()
         else:
             super().keyPressEvent(event)

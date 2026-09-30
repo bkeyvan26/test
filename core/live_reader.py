@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-"""K1 VMS — Live reader (Phase 6.6: TCP grid + careful err_detect)"""
-import os
+"""K1 VMS — Live reader (Phase 6.7.6: quiet stderr + adaptive TCP)"""
 import sys
 import time
 import shutil
@@ -98,6 +97,26 @@ class LiveReader(QThread):
     state_changed = Signal(str, str)
     first_frame_ready = Signal(str)
 
+    # ★ پیام‌های decoder که باید نادیده گرفته شوند
+    _NOISE_PATTERNS = (
+        "error while decoding MB",
+        "left block unavailable",
+        "top block unavailable",
+        "cabac decode",
+        "out of range intra",
+        "corrupted macroblock",
+        "concealing",
+        "reference picture missing",
+        "Could not find ref",
+        "Error constructing the frame RPS",
+        "The cu_qp_delta",
+        "getaddrinfo",
+        "SEI type",
+        "truncated at",
+        "Non-reference picture",
+        "POC",
+    )
+
     def __init__(self, uid, url, target_fps=5, out_w=640, out_h=360,
                  role="grid", transport="udp", parent=None):
         super().__init__(parent)
@@ -145,11 +164,11 @@ class LiveReader(QThread):
     # ============================================================
     # Public API
     # ============================================================
-    def get_state(self) -> str:
+    def get_state(self):
         with self._state_lock:
             return self._state
 
-    def is_ready(self) -> bool:
+    def is_ready(self):
         if self._latest_frame is None:
             return False
         with self._state_lock:
@@ -158,10 +177,10 @@ class LiveReader(QThread):
     def get_latest_frame(self):
         return self._latest_frame
 
-    def get_latest_frame_seq(self) -> int:
+    def get_latest_frame_seq(self):
         return self._latest_frame_seq
 
-    def created_elapsed(self) -> float:
+    def created_elapsed(self):
         return time.monotonic() - self._created_at
 
     def first_frame_elapsed(self):
@@ -176,13 +195,13 @@ class LiveReader(QThread):
         self._set_state(ST_STOPPING)
         self._kill_proc_internal()
 
-    def is_alive(self) -> bool:
+    def is_alive(self):
         try:
             return self.isRunning()
         except RuntimeError:
             return False
 
-    def proc_alive(self) -> bool:
+    def proc_alive(self):
         with self._proc_lock:
             p = self._proc
         return bool(p is not None and p.poll() is None)
@@ -192,7 +211,7 @@ class LiveReader(QThread):
             p = self._proc
         return getattr(p, "pid", None) if p is not None else None
 
-    def effective_transport(self) -> str:
+    def effective_transport(self):
         if self._force_tcp:
             return "tcp"
         return self.transport
@@ -227,24 +246,17 @@ class LiveReader(QThread):
         if p is None:
             self._closing = False
             return
-        try:
-            if p.stdout:
-                p.stdout.close()
-        except Exception:
-            pass
-        try:
-            if p.stderr:
-                p.stderr.close()
-        except Exception:
-            pass
+        for stream in (p.stdout, p.stderr):
+            try:
+                if stream:
+                    stream.close()
+            except Exception:
+                pass
         if p.poll() is not None:
             self._closing = False
             return
         try:
             p.terminate()
-        except Exception:
-            pass
-        try:
             p.wait(timeout=0.4)
             self._closing = False
             return
@@ -252,9 +264,6 @@ class LiveReader(QThread):
             pass
         try:
             p.kill()
-        except Exception:
-            pass
-        try:
             p.wait(timeout=0.3)
             self._closing = False
             return
@@ -279,21 +288,19 @@ class LiveReader(QThread):
             f"format=rgb24"
         )
 
-    # ============================================================
-    # Command (★ Phase 6.6: grid TCP + careful)
-    # ============================================================
     def _build_cmd(self):
         vf = self._build_vf()
         transport = self.effective_transport()
 
         if self.role == "grid":
-            # ★ برای TCP: threads بالاتر، بدون nobuffer
             threads = "2"
             analyzedur = "1500000"
             probesize = "2000000"
             fflags = "discardcorrupt+genpts+igndts"
             ec = "guess_mvs"
             err_detect = "careful"
+            # ★ grid: لاگ فقط fatal → decoder noise خفه شود
+            loglevel = "fatal"
         else:
             threads = "3"
             analyzedur = "1500000"
@@ -301,10 +308,12 @@ class LiveReader(QThread):
             fflags = "discardcorrupt+genpts+igndts"
             ec = "guess_mvs"
             err_detect = "careful"
+            # ★ single: error کافی است
+            loglevel = "error"
 
         args = [
             self._ffmpeg,
-            "-y", "-hide_banner", "-loglevel", "error",
+            "-y", "-hide_banner", "-loglevel", loglevel,
             "-threads", threads,
             "-rtsp_transport", transport,
             "-fflags", fflags,
@@ -325,6 +334,12 @@ class LiveReader(QThread):
         ]
         return args
 
+    def _is_noise(self, s: str) -> bool:
+        for pat in self._NOISE_PATTERNS:
+            if pat in s:
+                return True
+        return False
+
     def _stderr_reader_loop(self):
         try:
             with self._proc_lock:
@@ -341,17 +356,24 @@ class LiveReader(QThread):
                     continue
                 if not s:
                     continue
+
                 if ("VPS" in s and "does not exist" in s) or \
                    ("PPS" in s and "out of range" in s):
                     if not self._hevc_join_detected:
                         self._hevc_join_detected = True
                         print(f"[PREWARM] HEVC_JOIN uid={self.uid}")
-                if logged < 5:
-                    print(f"[Reader:{self.uid}:{self.role}] STDERR {s[:180]}")
-                    logged += 1
+
                 if "461" in s and "Unsupported Transport" in s:
                     if not self._force_tcp:
                         self._udp_failed_461 = True
+
+                # ★ فیلتر noise decoder
+                if self._is_noise(s):
+                    continue
+
+                if logged < 5:
+                    print(f"[Reader:{self.uid}:{self.role}] STDERR {s[:180]}")
+                    logged += 1
         except Exception:
             pass
 

@@ -1,20 +1,12 @@
 # -*- coding: utf-8 -*-
-"""
-K1 VMS — Playback engine (Phase C + trace instrumentation)
-
-Trace instrumentation added (MEASUREMENT ONLY, no behavior change):
-- PLAY_CLICK, PLAY_ENTER
-- SEEK_APPLY_BEGIN, OLD_PROC_CLOSED
-- FFMPEG_SPAWN_BEGIN, FFMPEG_SPAWN_END, FFMPEG_SPAWN_FAILED
-- OPEN_SEGMENT_RESULT
-- READ_FIRST_FRAME_BEGIN, FIRST_BYTES_READ, READ_FIRST_FRAME_END
-- FIRST_FRAME_EMITTED
-"""
+"""K1 VMS — Playback engine (Phase 6.7.6: dedicated reader thread + zero-copy)"""
 import os
 import sys
 import time
 import shutil
 import subprocess
+import threading
+import queue
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -23,9 +15,6 @@ import numpy as np
 IS_WIN = sys.platform.startswith("win")
 
 
-# ============================================================
-# Helpers
-# ============================================================
 def _spawn_kwargs():
     if IS_WIN:
         si = subprocess.STARTUPINFO()
@@ -52,6 +41,74 @@ def _find_ffmpeg() -> Optional[str]:
 
 
 # ============================================================
+# ★ ReaderThread — جدا از main thread
+# ============================================================
+class _ReaderThread(threading.Thread):
+    """Thread اختصاصی برای خواندن فریم‌ها از FFmpeg stdout."""
+
+    MAX_QUEUE = 4   # حداکثر فریم در صف (برای جلوگیری از مصرف حافظه)
+
+    def __init__(self, proc, frame_size, out_h, out_w):
+        super().__init__(daemon=True)
+        self.proc = proc
+        self.frame_size = frame_size
+        self.out_h = out_h
+        self.out_w = out_w
+        self.queue = queue.Queue(maxsize=self.MAX_QUEUE)
+        self._stop = threading.Event()
+        self._eof = False
+
+    def stop(self):
+        self._stop.set()
+        try:
+            while True:
+                self.queue.get_nowait()
+        except queue.Empty:
+            pass
+
+    def run(self):
+        stdout = self.proc.stdout
+        if stdout is None:
+            self._eof = True
+            return
+        while not self._stop.is_set():
+            try:
+                raw = stdout.read(self.frame_size)
+            except Exception:
+                self._eof = True
+                break
+            if not raw or len(raw) != self.frame_size:
+                self._eof = True
+                break
+            try:
+                arr = np.frombuffer(raw, np.uint8).reshape(
+                    (self.out_h, self.out_w, 3))
+                # ★ صف پر → قدیمی را بردار (Drop Frame)
+                try:
+                    self.queue.put_nowait(arr)
+                except queue.Full:
+                    try:
+                        self.queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        self.queue.put_nowait(arr)
+                    except queue.Full:
+                        pass
+            except Exception:
+                continue
+
+    def is_eof(self):
+        return self._eof and self.queue.empty()
+
+    def get(self, timeout=0.05):
+        try:
+            return self.queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+
+# ============================================================
 # Playback Engine
 # ============================================================
 class PlaybackEngine(QObject):
@@ -66,7 +123,7 @@ class PlaybackEngine(QObject):
     MAX_SPEED = 4.0
     OUT_W = 960
     OUT_H = 540
-    MAX_READS_PER_TICK = 12
+    MAX_READS_PER_TICK = 3      # ★ کاهش: چون reader خودش buffer دارد
     GAP_JUMP_THRESHOLD_SEC = 1.5
 
     def __init__(self, parent=None):
@@ -75,6 +132,7 @@ class PlaybackEngine(QObject):
         self._segment_idx = -1
 
         self._proc: Optional[subprocess.Popen] = None
+        self._reader: Optional[_ReaderThread] = None
         self._cap_open = False
         self._position = 0.0
         self._speed = 1.0
@@ -99,9 +157,8 @@ class PlaybackEngine(QObject):
         if self._ffmpeg:
             print(f"[PlaybackEngine] ffmpeg: {self._ffmpeg}")
         else:
-            print("[PlaybackEngine] ⚠ ffmpeg not found")
+            print("[PlaybackEngine] ffmpeg not found")
 
-        # ---- trace ----
         self._active_trace = None
 
     # ============================================================
@@ -170,13 +227,11 @@ class PlaybackEngine(QObject):
     def play(self):
         if not self._segments:
             return
-        # ---- trace ----
         try:
             if self._active_trace:
                 self._active_trace.mark("PLAY_ENTER")
         except Exception:
             pass
-        # ---- end trace ----
         if self._proc is None and self._state != "gap":
             self._apply_seek(self._position, force_pause=True)
         self._is_playing = True
@@ -251,30 +306,25 @@ class PlaybackEngine(QObject):
     def _apply_seek(self, seconds, force_pause=False):
         seconds = max(0.0, float(seconds))
         was_playing = self._is_playing and not force_pause
-        # ---- trace ----
         try:
             if self._active_trace:
                 self._active_trace.mark("SEEK_APPLY_BEGIN",
                                         target=f"{seconds:.2f}")
         except Exception:
             pass
-        # ---- end trace ----
 
         self._is_playing = False
         self._tick_timer.stop()
 
         self._close_proc()
-        # ---- trace ----
         try:
             if self._active_trace:
                 self._active_trace.mark("OLD_PROC_CLOSED")
         except Exception:
             pass
-        # ---- end trace ----
 
         idx = self._find_segment(seconds)
         if idx is None:
-            # ---- trace ----
             try:
                 if self._active_trace:
                     self._active_trace.mark("GAP_NO_SEGMENT",
@@ -282,7 +332,6 @@ class PlaybackEngine(QObject):
                     self._active_trace.end("END_GAP")
             except Exception:
                 pass
-            # ---- end trace ----
             self._position = seconds
             self._set_state("gap")
             self._last_frame = None
@@ -299,13 +348,11 @@ class PlaybackEngine(QObject):
             self._fps = 25.0
 
         ok = self._open_segment(seg, offset=seconds - seg["start"])
-        # ---- trace ----
         try:
             if self._active_trace:
                 self._active_trace.mark("OPEN_SEGMENT_RESULT", ok=ok)
         except Exception:
             pass
-        # ---- end trace ----
         if not ok:
             self._set_state("error")
             return
@@ -314,24 +361,20 @@ class PlaybackEngine(QObject):
         self.position_changed.emit(self._position)
         self.segment_changed.emit(idx)
 
-        # ---- trace ----
         try:
             if self._active_trace:
                 self._active_trace.mark("READ_FIRST_FRAME_BEGIN")
         except Exception:
             pass
-        # ---- end trace ----
 
-        frame = self._read_one_frame()
-
-        # ---- trace ----
+        # ★ اول فریم از reader
+        frame = self._get_frame_from_reader()
         try:
             if self._active_trace:
                 self._active_trace.mark("READ_FIRST_FRAME_END",
                                         ok=(frame is not None))
         except Exception:
             pass
-        # ---- end trace ----
 
         if frame is not None:
             self._emit_rgb(frame)
@@ -350,12 +393,11 @@ class PlaybackEngine(QObject):
             new_pos = max(0.0, self._position - 1.0 / max(1.0, self._fps))
             self._apply_seek(new_pos, force_pause=True)
         else:
-            if self._proc and self._proc.stdout:
-                frame = self._read_one_frame()
-                if frame is not None:
-                    self._position += 1.0 / max(1.0, self._fps)
-                    self._emit_rgb(frame)
-                    self.position_changed.emit(self._position)
+            frame = self._get_frame_from_reader()
+            if frame is not None:
+                self._position += 1.0 / max(1.0, self._fps)
+                self._emit_rgb(frame)
+                self.position_changed.emit(self._position)
 
     # ============================================================
     # Internals
@@ -390,7 +432,6 @@ class PlaybackEngine(QObject):
             "-"
         ]
 
-        # ---- trace ----
         try:
             if self._active_trace:
                 self._active_trace.mark("FFMPEG_SPAWN_BEGIN",
@@ -398,40 +439,47 @@ class PlaybackEngine(QObject):
                                         offset=f"{offset:.2f}")
         except Exception:
             pass
-        # ---- end trace ----
 
         try:
             self._proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                bufsize=self._frame_size * 4,
+                bufsize=self._frame_size * 8,
                 **_spawn_kwargs()
             )
             self._cap_open = True
-            # ---- trace ----
+
+            # ★ Reader thread اختصاصی
+            self._reader = _ReaderThread(
+                self._proc, self._frame_size,
+                self.OUT_H, self.OUT_W)
+            self._reader.start()
+
             try:
                 if self._active_trace:
                     self._active_trace.mark("FFMPEG_SPAWN_END",
                                             pid=self._proc.pid)
             except Exception:
                 pass
-            # ---- end trace ----
             return True
         except Exception as e:
             print(f"[PlaybackEngine] spawn failed: {e}")
             self._proc = None
             self._cap_open = False
-            # ---- trace ----
-            try:
-                if self._active_trace:
-                    self._active_trace.mark("FFMPEG_SPAWN_FAILED", err=str(e))
-            except Exception:
-                pass
-            # ---- end trace ----
+            self._reader = None
             return False
 
     def _close_proc(self):
+        # ★ اول reader را متوقف کن
+        r = self._reader
+        self._reader = None
+        if r is not None:
+            try:
+                r.stop()
+            except Exception:
+                pass
+
         p = self._proc
         self._proc = None
         self._cap_open = False
@@ -447,46 +495,29 @@ class PlaybackEngine(QObject):
         except Exception:
             pass
         try:
-            p.wait(timeout=1)
+            p.wait(timeout=0.5)
         except Exception:
             try:
                 p.kill()
             except Exception:
                 pass
 
-    def _read_one_frame(self):
-        if not self._proc or not self._proc.stdout:
+    def _get_frame_from_reader(self):
+        """★ فقط از صف reader می‌خواند — بدون I/O در main thread."""
+        r = self._reader
+        if r is None:
             return None
-        try:
-            raw = self._proc.stdout.read(self._frame_size)
-        except Exception:
-            return None
-
-        # ---- trace ----
-        try:
-            if self._active_trace:
-                self._active_trace.mark_once("FIRST_BYTES_READ",
-                                             n=len(raw or b""))
-        except Exception:
-            pass
-        # ---- end trace ----
-
-        if len(raw) != self._frame_size:
-            return None
-        return np.frombuffer(raw, np.uint8).reshape(
-            (self.OUT_H, self.OUT_W, 3)
-        ).copy()
+        arr = r.get(timeout=0.05)
+        return arr
 
     def _emit_rgb(self, bgr_frame):
-        # ---- trace ----
         try:
             if self._active_trace:
                 self._active_trace.mark_once("FIRST_FRAME_EMITTED")
         except Exception:
             pass
-        # ---- end trace ----
         try:
-            rgb = bgr_frame[:, :, ::-1].copy()
+            rgb = bgr_frame[:, :, ::-1]
         except Exception:
             return
         self._last_frame = rgb
@@ -538,18 +569,16 @@ class PlaybackEngine(QObject):
             self._position = nxt["start"]
             self.position_changed.emit(self._position)
             self.segment_changed.emit(nxt_idx)
-
             self._wall_start = time.monotonic()
             self._wall_pos_start = self._position
 
-            frame = self._read_one_frame()
+            frame = self._get_frame_from_reader()
             if frame is not None:
                 self._emit_rgb(frame)
 
             self._set_state("playing")
             return True
 
-        # Small gap → seamless transition
         self._segment_idx = nxt_idx
         if nxt.get("fps") and nxt["fps"] > 1.0:
             self._fps = float(nxt["fps"])
@@ -566,11 +595,10 @@ class PlaybackEngine(QObject):
         self._position = nxt["start"]
         self.position_changed.emit(self._position)
         self.segment_changed.emit(nxt_idx)
-
         self._wall_start = time.monotonic()
         self._wall_pos_start = self._position
 
-        frame = self._read_one_frame()
+        frame = self._get_frame_from_reader()
         if frame is not None:
             self._emit_rgb(frame)
 
@@ -580,7 +608,7 @@ class PlaybackEngine(QObject):
     # Tick
     # ============================================================
     def _tick(self):
-        if not self._is_playing or self._proc is None:
+        if not self._is_playing or self._reader is None:
             return
         try:
             wall_elapsed = time.monotonic() - self._wall_start
@@ -601,16 +629,21 @@ class PlaybackEngine(QObject):
             self._wall_pos_start = target_pos
 
             last_frame = None
+            got_any = False
             for _ in range(frames_needed):
-                frame = self._read_one_frame()
+                frame = self._get_frame_from_reader()
                 if frame is None:
-                    if not self._advance_to_next_segment():
+                    # ★ اگر reader تمام شد → segment بعد
+                    if self._reader is not None and self._reader.is_eof():
+                        if not self._advance_to_next_segment():
+                            return
                         return
-                    return
+                    break
                 last_frame = frame
+                got_any = True
                 self._position += frame_interval
 
-            if last_frame is not None:
+            if got_any and last_frame is not None:
                 self._emit_rgb(last_frame)
                 self.position_changed.emit(self._position)
 

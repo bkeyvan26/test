@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Pure helper functions for LivePage (Phase 6.5).
-
-اصل طلایی: اگر Admin عدد FPS داده، همان اجرا می‌شود.
-ما فقط برای حالت «auto» تصمیم می‌گیریم.
-"""
+"""Pure helper functions for LivePage (Phase 6.6)."""
 
 
 def parse_size(s):
@@ -46,16 +42,13 @@ def build_stream_url(cam, profile_id: str, nvr) -> str:
     profile = cam.get_profile_by_id(profile_id) if profile_id else None
     if profile is None:
         return ""
-
     try:
         import config
         use_mtx = bool(getattr(config, "LIVE_USE_MEDIAMTX", False))
     except Exception:
         use_mtx = False
-
     if not use_mtx or not nvr:
         return profile.url or ""
-
     try:
         from core.nvr_engine import _camera_path_name
         name = _camera_path_name(cam)
@@ -100,11 +93,7 @@ def compute_output_size_for(cam, role: str):
 
 
 def compute_fps_for(cam, role: str, n_cells: int = 1) -> int:
-    """
-    ★ Phase 6.5: Admin تصمیم می‌گیرد.
-    - اگر admin عدد داده (override > 0): همان استفاده شود، بدون هیچ محدودیتی.
-    - اگر auto: پیش‌فرض هوشمند (بسته به تعداد کاشی و fps دوربین).
-    """
+    """Admin decides. If admin gave a number → use it. Only auto gets smart defaults."""
     if role == "grid":
         profile_id = cam.grid_profile_id
         override_fps = int(getattr(cam, "grid_display_fps", 0) or 0)
@@ -115,25 +104,19 @@ def compute_fps_for(cam, role: str, n_cells: int = 1) -> int:
     profile = cam.get_profile_by_id(profile_id) if profile_id else None
     src_fps = profile.fps if (profile and profile.fps) else 0
 
-    # ★ اگر admin عدد داده، احترام بگذار — هیچ cap یا محدودیتی اعمال نکن
     if override_fps > 0:
         return max(1, override_fps)
 
-    # ★ اگر auto: پیش‌فرض هوشمند
-
     if role == "single":
-        # single: از fps دوربین، سقف 15
         if src_fps > 0:
             return min(src_fps, 15)
         return 15
 
-    # grid auto
     if src_fps > 0:
         base = min(src_fps, 10)
     else:
         base = 5
 
-    # فقط در حالت auto، با تعداد زیاد کاشی کاهش بده
     if n_cells > 16:
         return min(base, 2)
     if n_cells > 9:
@@ -237,25 +220,49 @@ def mediamtx_path_ready(nvr, cam, profile_id):
 
 
 # ============================================================
-# ★ Phase 6.4: انتخاب profile برای single
+# ★ Auto-Sub smart: بر اساس مگاپیکسل، نه عرض/ارتفاع
+#   دوربین‌های 4MP و کمتر ← Full Main (تفاوت واضح با Grid)
+#   دوربین‌های > 5MP ← Sub (صرفه‌جویی CPU، چون Main خیلی سنگین است)
 # ============================================================
 def resolve_single_profile_id(cam):
-    """اگر رزولیشن Main خیلی بالاست، برای Live از Sub استفاده کن."""
     live_pid = cam.live_profile_id
     try:
         import config
-        max_w = int(getattr(config, "LIVE_AUTO_SUB_ABOVE_WIDTH", 1920))
-        max_h = int(getattr(config, "LIVE_AUTO_SUB_ABOVE_HEIGHT", 1080))
+
+        if not getattr(config, "LIVE_AUTO_SUB_ENABLED", True):
+            return live_pid
+
+        threshold_mp = float(getattr(config, "LIVE_AUTO_SUB_ABOVE_MP", 5.0))
+        min_ratio = float(getattr(config, "LIVE_AUTO_SUB_MIN_RATIO", 4.0))
+
         lp = cam.get_profile_by_id(live_pid) if live_pid else None
-        if lp and lp.width and lp.height and \
-           (lp.width > max_w or lp.height > max_h):
-            sub_pid = cam.grid_profile_id
-            sp = cam.get_profile_by_id(sub_pid) if sub_pid else None
-            if sp and sp.width and sp.height:
-                print(f"[live-helper] {cam.name or cam.uid}: using Sub "
-                      f"({sp.width}x{sp.height}) instead of "
-                      f"Main ({lp.width}x{lp.height})")
-                return sub_pid
+        if not (lp and lp.width and lp.height):
+            return live_pid
+
+        main_mp = (lp.width * lp.height) / 1_000_000.0
+        if main_mp <= threshold_mp:
+            # Main کوچک است، از Sub استفاده نکن — Full کیفیت
+            return live_pid
+
+        sub_pid = cam.grid_profile_id
+        if not sub_pid or sub_pid == live_pid:
+            return live_pid
+        sp = cam.get_profile_by_id(sub_pid) if sub_pid else None
+        if not (sp and sp.width and sp.height):
+            return live_pid
+
+        sub_mp = (sp.width * sp.height) / 1_000_000.0
+        if sub_mp <= 0:
+            return live_pid
+        ratio = main_mp / sub_mp
+
+        if ratio < min_ratio:
+            return live_pid
+
+        print(f"[live-helper] {cam.name or cam.uid}: auto-sub "
+              f"({lp.width}x{lp.height} / {main_mp:.1f}MP) → "
+              f"({sp.width}x{sp.height} / {sub_mp:.1f}MP)  ratio={ratio:.1f}x")
+        return sub_pid
     except Exception:
         pass
     return live_pid

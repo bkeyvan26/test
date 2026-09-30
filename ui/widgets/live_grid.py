@@ -223,7 +223,9 @@ class LiveCell(QFrame):
         self._motion = state.get("motion", False)
         self.update()
 
-    # ★ Phase 6.5: bad-frame detection
+    # ★ Phase 6.6: bad-frame detection (بهبودیافته)
+    #   - فقط نوار پایین (۱۰٪) چک می‌شود ← false positive کمتر روی چمن/جنگل
+    #   - آستانه‌ها سخت‌گیرانه‌تر ← فریم‌های سالم رد نمی‌شوند
     def set_frame(self, payload):
         if isinstance(payload, tuple) and len(payload) == 2:
             seq, frame = payload
@@ -233,19 +235,19 @@ class LiveCell(QFrame):
             return
         self._cached_seq = seq
 
-        # ★ تشخیص فریم خراب (نصف سبز)
         try:
             if frame is not None and hasattr(frame, "shape"):
-                h = frame.shape[0]
-                if h > 20:
-                    # ناحیه پایین (۷۰٪ به بعد)
-                    bottom = frame[int(h * 0.7):, :, :]
-                    mean_rgb = bottom.reshape(-1, 3).mean(axis=0)
-                    r, g, b = float(mean_rgb[0]), float(mean_rgb[1]), float(mean_rgb[2])
-                    # اگر G خیلی بیشتر از R و B بود → فریم خراب
-                    if g > 100 and (g - r) > 60 and (g - b) > 60:
-                        # نگه‌داشتن فریم قبلی
-                        return
+                h, w = frame.shape[:2]
+                if h > 40 and w > 40:
+                    strip_h = max(8, h // 10)   # فقط ۱۰٪ پایین
+                    strip = frame[h - strip_h:, :, :]
+                    mean_rgb = strip.reshape(-1, 3).mean(axis=0)
+                    r = float(mean_rgb[0])
+                    g = float(mean_rgb[1])
+                    b = float(mean_rgb[2])
+                    # سبز خالص (نه چمن): G بالا + اختلاف زیاد با R و B
+                    if g > 120 and (g - r) > 80 and (g - b) > 80:
+                        return   # فریم قبلی حفظ می‌شود
         except Exception:
             pass
 

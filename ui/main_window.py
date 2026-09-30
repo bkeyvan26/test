@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""K1 VMS — Main Window (Phase 3: Live View integrated, safe shutdown)"""
+"""K1 VMS — Main Window (Phase 6.6: global loading overlay)"""
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QStackedWidget,
     QFrame, QLabel, QMessageBox, QApplication, QLineEdit, QTextEdit,
@@ -22,6 +22,9 @@ from ui.pages.placeholders import (
     AlarmsPage, AIPage, SearchPage,
     MapPage, ReportsPage, SettingsPage, UsersPage
 )
+from ui.loading_overlay import GlobalLoadingOverlay
+from ui.activity_bus import ActivityBus
+from ui.loading_texts import t as t_load
 from core.camera_manager import CameraManager
 from core.nvr_engine import NVREngine
 from core import settings_manager
@@ -67,7 +70,9 @@ class MainWindow(QMainWindow):
         self._start_nvr()
         self._refresh_header()
 
-        # Polling timer
+        # ★ Global loading overlay
+        self._loading_overlay = GlobalLoadingOverlay(self)
+
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_tick)
         self._timer.start(2000)
@@ -83,7 +88,8 @@ class MainWindow(QMainWindow):
         self.header.user_menu_requested.connect(self._show_user_menu)
         root.addWidget(self.header)
 
-        body = QHBoxLayout(); body.setSpacing(0); body.setContentsMargins(0, 0, 0, 0)
+        body = QHBoxLayout(); body.setSpacing(0)
+        body.setContentsMargins(0, 0, 0, 0)
 
         self.rail = IconRail()
         self.rail.page_changed.connect(self._on_page_changed)
@@ -114,7 +120,6 @@ class MainWindow(QMainWindow):
         root.addWidget(status)
         self.setCentralWidget(central)
 
-        # Register pages
         pages = [
             DashboardPage(),
             LivePage(nvr_engine=self.nvr),
@@ -151,7 +156,14 @@ class MainWindow(QMainWindow):
         QApplication.instance().installEventFilter(self._kb)
 
     # ============================================================
-    # NVR lifecycle
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_loading_overlay"):
+            try:
+                self._loading_overlay.refresh_geometry()
+            except Exception:
+                pass
+
     # ============================================================
     def _start_nvr(self):
         if not self.settings.mediamtx_enabled:
@@ -167,7 +179,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"[NVR] exception: {e}")
 
-    # ============================================================
     def _on_tick(self):
         if self._shutting_down:
             return
@@ -215,17 +226,26 @@ class MainWindow(QMainWindow):
         if key not in self._pages: return
 
         cur = self.workspace.currentWidget()
+        if cur is self._pages[key]:
+            return
+
+        # ★ Loading feedback for page switch (only if takes >250ms)
+        page = self._pages[key]
+        try:
+            ActivityBus.instance().show(t_load(
+                "page_switch", page=page.PAGE_TITLE))
+        except Exception:
+            pass
+
         if hasattr(cur, "on_hide"):
             try:
                 cur.on_hide()
             except Exception as e:
                 print(f"[page hide] {e}")
 
-        page = self._pages[key]
         self.workspace.setCurrentWidget(page)
         self.rail.set_active_page(key)
 
-        # Hide/show side panel based on page preference
         if getattr(page, "HAS_PANEL", True):
             self.panel.show()
             self.panel.show_content(key)
@@ -238,6 +258,15 @@ class MainWindow(QMainWindow):
                 page.on_show()
             except Exception as e:
                 print(f"[page show] {e}")
+
+        # Hide loading after a short delay
+        QTimer.singleShot(250, self._hide_activity_after_switch)
+
+    def _hide_activity_after_switch(self):
+        try:
+            ActivityBus.instance().hide()
+        except Exception:
+            pass
 
     # ============================================================
     def _open_command_bar(self):
@@ -257,9 +286,6 @@ class MainWindow(QMainWindow):
         else: self.showFullScreen()
 
     # ============================================================
-    # IMPORTANT: Do NOT stop MediaMTX on window close.
-    # DO stop all pages (especially LivePage readers).
-    # ============================================================
     def closeEvent(self, event):
         if self._shutting_down:
             super().closeEvent(event)
@@ -268,16 +294,16 @@ class MainWindow(QMainWindow):
 
         print("[shutdown] stopping pages…")
 
-        # Stop timer first
         try:
             self._timer.stop()
         except Exception:
             pass
 
-        # Stop every page.
-        # ★ If page has shutdown() → call it (LivePage stops its readers).
-        #   Otherwise fall back to on_hide() for pages that still need it
-        #   (PlaybackPage pauses the engine here).
+        try:
+            ActivityBus.instance().show(t_load("shutdown"))
+        except Exception:
+            pass
+
         for key, page in self._pages.items():
             try:
                 if hasattr(page, "shutdown"):
@@ -287,10 +313,7 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"[shutdown] {key}: {e}")
 
-        # Give threads a moment to exit
         QApplication.processEvents()
 
         print("[shutdown] done — MediaMTX left running (detached)")
-
-        # Intentionally do NOT call self.nvr.stop().
         super().closeEvent(event)

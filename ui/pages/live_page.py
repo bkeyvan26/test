@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""K1 VMS — Live View page (Phase 6.6: TCP grid + same-profile warning)"""
+"""K1 VMS — Live View page (Phase 6.7.6: safe signal management)"""
 import os
 import json
 import time
@@ -22,6 +22,7 @@ from ui.widgets.live_grid import LiveGrid, MIME_CAMERA
 from ui.widgets.layout_picker import LayoutPicker
 from ui.widgets.camera_list_widget import CameraListWidget
 from ui.activity_bus import ActivityBus
+from ui.loading_texts import t as t_load
 
 from ui.pages.live_helpers import (
     parse_size, redact_url, build_stream_url,
@@ -59,6 +60,9 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
     MAX_PREWARM_SINGLE_READERS = getattr(
         config, "LIVE_MAX_SINGLE_READERS", 3)
     STATE_FILE = STATE_FILE
+
+    FOCUS_DELAY_MS = 300
+    FOCUS_RESUME_STAGGER_MS = 20
 
     def __init__(self, nvr_engine=None, parent=None):
         super().__init__(parent)
@@ -108,28 +112,31 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self._mediamtx_retry = {}
         self._max_mediamtx_retry = 8
 
-        # ★ Phase 6.4: activity indicator update timer
         self._activity_timer = QTimer(self)
         self._activity_timer.timeout.connect(self._check_activity)
         self._activity_timer.start(400)
         self._last_activity_text = ""
+
+        self._focus_paused = False
+        self._focus_paused_uids = set()
+        self._focus_frames_cache = {}
+        self._focus_delay_timer = None
+
+        self._focus_resume_started = None
+        self._focus_resume_total = 0
+        self._focus_resume_done = 0
 
         self._build()
         self._load_cameras()
         self._restore_state()
 
     # ============================================================
-    # Reader retirement (non-blocking)
-    # ============================================================
     def _retire_reader(self, reader):
         if reader is None:
             return
         try:
             reader.stop()
-        except Exception:
-            pass
-        try:
-            self._dying_readers.append(reader)
+            reader.deleteLater()
         except Exception:
             pass
 
@@ -147,8 +154,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
                 pass
         self._dying_readers = alive
 
-    # ============================================================
-    # UI Build
     # ============================================================
     def _build(self):
         root = QVBoxLayout(self)
@@ -256,7 +261,8 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         hint = QLabel(
             "•  دو کلیک: تمام‌صفحه (کیفیت تکی)\n"
             "•  اسکرول روی تصویر: زوم\n"
-            "•  Drag دوربین/کاشی")
+            "•  Drag دوربین/کاشی\n"
+            "•  💡 در حالت تکی، CPU برای دوربین فعال آزاد می‌شود")
         hint.setWordWrap(True)
         hint.setStyleSheet(
             f"color: {theme.COLOR_TEXT_MUTED}; font-size: 10px; padding: 4px;")
@@ -311,7 +317,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             f"QPushButton:hover {{ background: {theme.COLOR_BG_HOVER}; }}")
         return b
 
-    # ---- wrappers ----
     def _build_stream_url(self, cam, profile_id):
         return build_stream_url(cam, profile_id, self.nvr)
 
@@ -324,23 +329,49 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
     def _mediamtx_path_ready(self, cam, profile_id):
         return mediamtx_path_ready(self.nvr, cam, profile_id)
 
-    # ★ Phase 6.6: pick transport based on config + role
-    def _pick_transport(self, role):
-        """TCP برای Grid (پایدار) یا UDP (سریع) — از config"""
+    def _pick_transport(self, role, cam=None):
         try:
-            if role == "single":
-                if getattr(config, "LIVE_SINGLE_FORCE_TCP", True):
+            if cam is not None:
+                if role == "single":
+                    cam_pref = getattr(cam, "live_transport", "auto")
+                else:
+                    cam_pref = getattr(cam, "grid_transport", "auto")
+                if cam_pref == "tcp":
                     return "tcp"
-            elif role == "grid":
-                if getattr(config, "LIVE_GRID_FORCE_TCP", True):
-                    return "tcp"
-        except Exception:
-            pass
-        return get_live_transport()
+                if cam_pref == "udp":
+                    return "udp"
 
-    # ============================================================
-    # Activity indicator
-    # ============================================================
+            if role == "single":
+                mode = getattr(config, "LIVE_SINGLE_FORCE_TCP", "auto")
+            else:
+                mode = getattr(config, "LIVE_GRID_FORCE_TCP", "auto")
+
+            if mode is True or mode == "tcp":
+                return "tcp"
+            if mode is False or mode == "udp":
+                return "udp"
+
+            if role == "single":
+                return "tcp"
+
+            if cam is not None:
+                try:
+                    pid = cam.grid_profile_id
+                    p = cam.get_profile_by_id(pid) if pid else None
+                    bitrate = int(
+                        getattr(p, "bitrate_kbps", 0) or 0
+                    ) if p else 0
+                    threshold = int(getattr(
+                        config, "LIVE_GRID_TCP_BITRATE_THRESHOLD", 2000))
+                    if bitrate >= threshold:
+                        return "tcp"
+                except Exception:
+                    pass
+
+            return get_live_transport()
+        except Exception:
+            return get_live_transport()
+
     def _check_activity(self):
         if self._shutting_down or self._clearing:
             return
@@ -348,13 +379,17 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         active = False
         text = ""
 
-        if self._pending_switch:
+        if getattr(self, "_focus_resume_total", 0) > 0:
+            done = getattr(self, "_focus_resume_done", 0)
+            total = self._focus_resume_total
+            active = True
+            text = f"بازگشت به شبکه… ({done}/{total})"
+        elif self._pending_switch:
             uid = self._pending_switch
             cam = self.cam_manager.get(uid)
             name = cam.name if cam else "دوربین"
             active = True
-            text = f"در حال سوئیچ به تکی: {name}"
-
+            text = t_load("live_switch_single", camera=name)
         elif self._prewarm_in_flight:
             n = len(self._prewarm_in_flight)
             active = True
@@ -362,10 +397,9 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
                 uid = next(iter(self._prewarm_in_flight.keys()))
                 cam = self.cam_manager.get(uid)
                 name = cam.name if cam else "دوربین"
-                text = f"آماده‌سازی تکی: {name}"
+                text = t_load("live_prewarm", camera=name)
             else:
-                text = f"آماده‌سازی {n} دوربین…"
-
+                text = t_load("live_prewarm_n", count=n)
         else:
             loading = 0
             first_name = ""
@@ -380,13 +414,13 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             if loading > 0:
                 active = True
                 if loading == 1:
-                    text = f"در حال اتصال: {first_name}"
+                    text = t_load("live_connect", camera=first_name)
                 else:
-                    text = f"در حال اتصال {loading} دوربین…"
+                    text = t_load("live_loading_n", count=loading)
 
         if self._clearing:
             active = True
-            text = "در حال پاک کردن…"
+            text = t_load("live_clear")
 
         try:
             bus = ActivityBus.instance()
@@ -401,9 +435,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         except Exception:
             pass
 
-    # ============================================================
-    # Layout
-    # ============================================================
     def _on_layout_selected(self, key):
         if self.grid.is_fullscreen():
             self._exit_fullscreen_mode()
@@ -468,9 +499,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         if save:
             self._save_state_to_disk()
 
-    # ============================================================
-    # Prewarm scheduler
-    # ============================================================
     def _schedule_prewarm_visible(self):
         self._prewarm_coalesce_timer.start(PREWARM_COALESCE_MS)
 
@@ -586,9 +614,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self._force_stop_single_reader(oldest)
         return True
 
-    # ============================================================
-    # Assign camera
-    # ============================================================
     def _assign_camera_to_cell(self, cell_idx, uid, start=True, save=True):
         if self._clearing or self._shutting_down:
             return
@@ -622,7 +647,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         if save:
             self._save_state_to_disk()
 
-    # ---- Grid reader ----
     def _start_grid_reader(self, uid, _epoch=None):
         if _epoch is not None and _epoch != self._clear_epoch:
             return
@@ -653,7 +677,7 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         n = max(1, len(self.grid.get_cells()))
         out_w, out_h = self._compute_output_size_for(cam, "grid")
         fps = self._compute_fps_for(cam, "grid", n_cells=n)
-        transport = self._pick_transport("grid")
+        transport = self._pick_transport("grid", cam=cam)
         print(f"[live-grid] {cam.name or uid}: fps={fps} "
               f"size={out_w}x{out_h} transport={transport}")
         reader = LiveReader(uid, url, target_fps=fps,
@@ -671,7 +695,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             return
         self._retire_reader(r)
 
-    # ---- Single reader ----
     def _start_single_reader(self, uid, _epoch=None):
         if _epoch is not None and _epoch != self._clear_epoch:
             return
@@ -697,13 +720,11 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             return
         self._mediamtx_retry.pop(uid, None)
 
-        # ★ اگر Main خیلی سنگین است، Sub بده
         pid = resolve_single_profile_id(cam)
         url = self._build_stream_url(cam, pid)
         if not url:
             return
 
-        # اندازه بر اساس profile انتخاب‌شده
         p = cam.get_profile_by_id(pid)
         if p and p.width and p.height:
             out_w, out_h = p.width, p.height
@@ -713,7 +734,7 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             out_w, out_h = self._compute_output_size_for(cam, "single")
 
         fps = self._compute_fps_for(cam, "single")
-        transport = self._pick_transport("single")
+        transport = self._pick_transport("single", cam=cam)
         print(f"[live-single] {cam.name or uid}: fps={fps} "
               f"size={out_w}x{out_h} transport={transport}")
 
@@ -807,7 +828,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             print(f"[prewarm] idle timeout uid={uid}")
             self._force_stop_single_reader(uid)
 
-    # ---- Frame handlers ----
     def _on_grid_frame(self, uid, payload, reader):
         if self._shutting_down or self._clearing:
             return
@@ -858,7 +878,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             self.grid.set_status(idx, text)
         self._refresh_status_list()
 
-    # ---- Cell interactions ----
     def _on_cell_clicked(self, idx):
         return
 
@@ -869,6 +888,161 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             self._exit_fullscreen_mode()
         else:
             self._enter_fullscreen_mode(idx)
+
+    def _schedule_focus_pause(self):
+        if not getattr(config, "LIVE_FOCUS_OPTIMIZE", True):
+            return
+        if self._focus_delay_timer is not None:
+            try:
+                self._focus_delay_timer.stop()
+            except Exception:
+                pass
+            self._focus_delay_timer = None
+        self._focus_delay_timer = QTimer(self)
+        self._focus_delay_timer.setSingleShot(True)
+        self._focus_delay_timer.timeout.connect(self._activate_focus_pause)
+        self._focus_delay_timer.start(self.FOCUS_DELAY_MS)
+
+    def _cancel_focus_pause(self):
+        if self._focus_delay_timer is not None:
+            try:
+                self._focus_delay_timer.stop()
+            except Exception:
+                pass
+            self._focus_delay_timer = None
+
+    def _activate_focus_pause(self):
+        self._focus_delay_timer = None
+        if self._focus_paused:
+            return
+        if self._fullscreen_uid is None:
+            return
+
+        focused = self._fullscreen_uid
+        self._focus_frames_cache = {}
+        to_pause = []
+        for uid in list(self.grid_readers.keys()):
+            if uid == focused:
+                continue
+            to_pause.append(uid)
+
+        if not to_pause:
+            return
+
+        for uid in to_pause:
+            r = self.grid_readers.get(uid)
+            if r is None:
+                continue
+            try:
+                f = r.get_latest_frame()
+                if f is not None:
+                    seq = r.get_latest_frame_seq()
+                    try:
+                        fcopy = f.copy()
+                    except Exception:
+                        fcopy = f
+                    self._focus_frames_cache[uid] = (seq, fcopy)
+            except Exception:
+                pass
+
+        self._focus_paused = True
+        self._focus_paused_uids = set(to_pause)
+        for uid in to_pause:
+            self._stop_grid_reader(uid)
+
+        print(f"[focus] paused {len(to_pause)} grid readers "
+              f"(cached {len(self._focus_frames_cache)} frames, "
+              f"kept focused={focused})")
+
+    def _resume_grid_after_focus(self):
+        if not self._focus_paused:
+            return
+        self._focus_paused = False
+        uids = list(self._focus_paused_uids)
+        self._focus_paused_uids.clear()
+        if not uids:
+            return
+        if self._fullscreen_uid is not None:
+            self._focus_paused = True
+            self._focus_paused_uids = set(uids)
+            return
+
+        restored = 0
+        for uid in uids:
+            cell_idx = self.uid_to_cell.get(uid)
+            if cell_idx is None:
+                continue
+            cached = self._focus_frames_cache.get(uid)
+            if cached is None:
+                continue
+            try:
+                seq, frame = cached
+                self.grid.set_frame(cell_idx, (seq, frame))
+                restored += 1
+            except Exception:
+                pass
+
+        n = len(uids)
+        if n <= 4:
+            stagger = 40
+        elif n <= 8:
+            stagger = 30
+        elif n <= 16:
+            stagger = 22
+        elif n <= 32:
+            stagger = 15
+        else:
+            stagger = 10
+
+        total_ms = n * stagger
+        print(f"[focus] resuming {len(uids)} grid readers "
+              f"({restored} frames restored, stagger={stagger}ms, "
+              f"~{total_ms}ms total)")
+
+        self._focus_resume_started = time.monotonic()
+        self._focus_resume_total = n
+        self._focus_resume_done = 0
+
+        e = self._clear_epoch
+        for i, uid in enumerate(uids):
+            if uid in self.uid_to_cell:
+                QTimer.singleShot(
+                    i * stagger,
+                    lambda u=uid, ee=e: self._start_grid_reader_with_progress(u, ee))
+
+        self._focus_frames_cache = {}
+
+    def _start_grid_reader_with_progress(self, uid, epoch):
+        try:
+            self._start_grid_reader(uid, _epoch=epoch)
+        finally:
+            self._focus_resume_done += 1
+            self._update_focus_progress()
+
+    def _update_focus_progress(self):
+        try:
+            total = getattr(self, "_focus_resume_total", 0)
+            done = getattr(self, "_focus_resume_done", 0)
+            if total <= 0:
+                return
+            if done >= total:
+                self._focus_resume_total = 0
+                self._focus_resume_done = 0
+                self.status_lbl.setText("آماده")
+                return
+            self.status_lbl.setText(
+                f"🔄 بازگشت به شبکه… ({done}/{total})")
+        except Exception:
+            pass
+
+    def _reset_focus_state(self):
+        self._cancel_focus_pause()
+        self._focus_paused = False
+        self._focus_paused_uids.clear()
+        self._focus_frames_cache.clear()
+        self._focus_resume_total = 0
+        self._focus_resume_done = 0
+        self._focus_resume_started = None
 
     def _enter_fullscreen_mode(self, idx):
         uid = self.cell_to_uid.get(idx)
@@ -886,22 +1060,18 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             self.cell_source[idx] = "grid"
             return
 
-        # ★ Phase 6.6: same-profile → پیام واضح
+        self._schedule_focus_pause()
+
         if cam.live_profile_id == cam.grid_profile_id:
             self._pending_switch = None
             print(f"[SWITCH] SAME_PROFILE uid={uid}")
-            print(f"[SWITCH] ⚠ دوربین فقط یک پروفایل دارد. "
-                  f"برای کیفیت تکی، پروفایل Live و Grid را متفاوت کن "
-                  f"(Main vs Sub) در Camera Dialog.")
             try:
                 self.status_lbl.setText(
                     f"⚠ {cam.name or uid}: برای Single، "
-                    f"پروفایل Live را متفاوت از Grid بگذار"
-                )
+                    f"پروفایل Live را متفاوت از Grid بگذار")
                 QTimer.singleShot(
                     4000,
-                    lambda: self.status_lbl.setText("آماده")
-                )
+                    lambda: self.status_lbl.setText("آماده"))
             except Exception:
                 pass
             elapsed = (time.monotonic() - t0) * 1000
@@ -919,7 +1089,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
                                         (r.get_latest_frame_seq(), latest))
                     showed_single = True
                     print(f"[SWITCH] READY uid={uid}")
-                    print(f"[SWITCH] LATEST_FRAME uid={uid}")
 
         if not showed_single:
             gr = self.grid_readers.get(uid)
@@ -968,6 +1137,10 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self._fullscreen_uid = None
         self._pending_switch = None
         self.grid.exit_fullscreen()
+
+        self._cancel_focus_pause()
+        if self._focus_paused:
+            self._resume_grid_after_focus()
 
     def _on_cell_close(self, idx):
         uid = self.cell_to_uid.pop(idx, None)
@@ -1022,7 +1195,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
     def _reset_all_zooms(self):
         self.grid.reset_all_zooms()
 
-    # ---- Snapshot / copy ----
     def _take_snapshot(self, idx):
         cells = self.grid.get_cells()
         if not (0 <= idx < len(cells)):
@@ -1061,7 +1233,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         except Exception as e:
             dlg_warning(self, f"خطا:\n{e}")
 
-    # ---- Bulk ----
     def _on_cam_double_clicked(self, item):
         if self._clearing:
             return
@@ -1090,8 +1261,10 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self._clearing = True
         self._clear_epoch += 1
 
+        self._reset_focus_state()
+
         try:
-            ActivityBus.instance().show("در حال پاک کردن…")
+            ActivityBus.instance().show(t_load("live_clear"))
         except Exception:
             pass
 
@@ -1133,15 +1306,28 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
                 self.grid.set_title(i, "")
                 self.grid.set_status(i, "")
 
-            for r in grid_list + single_list:
-                self._retire_reader(r)
-
             self._refresh_status_list()
             self._save_state_to_disk()
+
+            # ★ بدون disconnect — Qt خودش هنگام stop() پاک می‌کند
+            all_readers = grid_list + single_list
+            for idx, r in enumerate(all_readers):
+                QTimer.singleShot(idx * 25,
+                                  lambda rr=r: self._retire_reader(rr))
+
             print(f"[live] cleared all tiles "
                   f"({len(grid_list)} grid + {len(single_list)} single)")
+        except Exception as e:
+            print(f"[live.clear] error: {e}")
         finally:
-            self._clearing = False
+            QTimer.singleShot(700, self._finish_clearing)
+
+    def _finish_clearing(self):
+        self._clearing = False
+        try:
+            ActivityBus.instance().hide()
+        except Exception:
+            pass
 
     def _refresh_status_list(self):
         self.status_list.clear()
@@ -1150,7 +1336,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             name = cam.name if cam else uid
             self.status_list.addItem(f"{name}: {txt}")
 
-    # ---- Lifecycle ----
     def on_show(self):
         try:
             self.cam_manager.reload()
@@ -1177,7 +1362,12 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             return
         self._shutting_down = True
         self._clear_epoch += 1
+        import time as _time
+        _shutdown_t0 = _time.monotonic()
+        SHUTDOWN_TIMEOUT_SEC = 4.0
         print("[SHUTDOWN] BEGIN")
+
+        self._reset_focus_state()
 
         self._prewarm_queue = []
         try:
@@ -1214,20 +1404,29 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
               f"(grid={len(grid_list)} single={len(single_list)} "
               f"dying={len(dying_list)})")
 
+        # ★ بدون disconnect — Qt خودش هنگام stop() پاک می‌کند
+
+        # Phase 1: stop() با timeout کلی
         for r in all_readers:
+            if _time.monotonic() - _shutdown_t0 > SHUTDOWN_TIMEOUT_SEC:
+                print("[SHUTDOWN] global timeout during STOP")
+                break
             try:
                 print(f"[SHUTDOWN] STOP uid={r.uid} role={r.role}")
                 r.stop()
             except Exception as e:
                 print(f"[SHUTDOWN] STOP error: {e}")
 
+        # Phase 2: wait() با timeout کوچکتر
         for r in all_readers:
+            if _time.monotonic() - _shutdown_t0 > SHUTDOWN_TIMEOUT_SEC:
+                break
             try:
-                if not r.wait(1500):
+                if not r.wait(800):
                     print(f"[SHUTDOWN] THREAD_TIMEOUT uid={r.uid}")
                     try:
                         r.terminate()
-                        r.wait(300)
+                        r.wait(200)
                     except Exception:
                         pass
                 else:
@@ -1256,7 +1455,8 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self._prewarm_started_at.clear()
         self._switch_wait_started_at.clear()
 
-        print(f"[SHUTDOWN] COMPLETE readers_alive={alive_count}")
+        print(f"[SHUTDOWN] COMPLETE readers_alive={alive_count} "
+              f"elapsed={(_time.monotonic()-_shutdown_t0):.1f}s")
 
     def _load_cameras(self):
         self.cam_list.blockSignals(True)

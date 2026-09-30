@@ -47,31 +47,40 @@ MEDIAMTX_RTSP_URL = f"rtsp://{MEDIAMTX_HOST}:{MEDIAMTX_RTSP_PORT}"
 LIVE_USE_MEDIAMTX = False
 LIVE_RTSP_TRANSPORT = "udp"
 
-# CPU limits
 LIVE_MAX_SINGLE_READERS = 3
 LIVE_SINGLE_IDLE_SEC = 600
 
-# Prewarm
 LIVE_PREWARM_COALESCE_MS = 600
 LIVE_PREWARM_STAGGER_MS = 200
 LIVE_PREWARM_STUCK_SEC = 30
 LIVE_PREWARM_CONCURRENCY = 1
 LIVE_PREWARM_TOP_N = 3
 
-# ★ فقط در حالت auto استفاده می‌شود. اگر admin عدد داد، نادیده گرفته می‌شود.
 LIVE_SINGLE_FPS_CAP = 15
 
-# ★ Transport
-#   True  → همیشه TCP (پایدار، CPU بالاتر)
-#   False → همیشه UDP (سریع، ریسک tearing)
-#   "auto" → TCP برای bitrate بالا، UDP برای بقیه
-LIVE_SINGLE_FORCE_TCP = True
-LIVE_GRID_FORCE_TCP = "auto"
+# ★★★ Focus Mode (Phase 6.7) ★★★
+# وقتی روی یک دوربین دابل‌کلیک می‌کنی (Single)، بقیه Grid readerها
+# موقتاً متوقف می‌شوند تا CPU برای دوربین focused آزاد شود.
+# با خروج از Single، خودکار برمی‌گردند.
+LIVE_FOCUS_OPTIMIZE = True
+
+# ============================================================
+# ★ Transport — 3-level priority:
+#   1. per-camera (Camera Dialog)  ← highest
+#   2. this file (global)          ← middle
+#   3. auto based on bitrate       ← lowest
+# Values: "auto" | "tcp" | "udp"
+# ============================================================
+LIVE_SINGLE_FORCE_TCP = "auto"
+LIVE_GRID_FORCE_TCP   = "auto"
 LIVE_GRID_TCP_BITRATE_THRESHOLD = 2000   # kbps
 
-# Auto-Sub برای دوربین‌های سنگین
-LIVE_AUTO_SUB_ABOVE_WIDTH = 1920
-LIVE_AUTO_SUB_ABOVE_HEIGHT = 1080
+# ============================================================
+# ★ Auto-Sub (Smart)
+# ============================================================
+LIVE_AUTO_SUB_ENABLED = True
+LIVE_AUTO_SUB_ABOVE_MP = 5.0
+LIVE_AUTO_SUB_MIN_RATIO = 4.0
 
 # ============================================================
 # 🖥️ UI
