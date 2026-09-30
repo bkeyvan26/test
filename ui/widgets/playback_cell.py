@@ -122,9 +122,12 @@ class PlaybackCell(QFrame):
             self._engine.stop()
             self._engine.set_segments(self._segments)
             if self._segments:
+                # Do not spawn FFmpeg while merely assigning a camera/day.
+                # Decoder starts only after the user chooses a time or presses Play.
                 first = self._segments[0]["start"]
-                self._engine.seek(first)
-                self._engine.pause()
+                self._engine.set_position_hint(first)
+                self.video.set_placeholder(
+                    f"ضبط آماده است\n{cam_name}\n{day}")
             else:
                 self.video.set_placeholder(
                     f"بدون ضبط\n{cam_name}\n{day}"
