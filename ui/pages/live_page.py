@@ -945,10 +945,18 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             except Exception:
                 pass
 
+        # Do NOT stop/reconnect RTSP readers. Mute Qt delivery only.
+        # The decoder continues consuming the stream and keeps the latest
+        # frame, so returning to grid is effectively instantaneous.
         self._focus_paused = True
         self._focus_paused_uids = set(to_pause)
         for uid in to_pause:
-            self._stop_grid_reader(uid)
+            r = self.grid_readers.get(uid)
+            if r is not None:
+                try:
+                    r.set_output_enabled(False)
+                except Exception:
+                    pass
 
         print(f"[focus] paused {len(to_pause)} grid readers "
               f"(cached {len(self._focus_frames_cache)} frames, "
@@ -970,46 +978,45 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         restored = 0
         for uid in uids:
             cell_idx = self.uid_to_cell.get(uid)
+            r = self.grid_readers.get(uid)
+            if r is not None:
+                try:
+                    r.set_output_enabled(True)
+                except Exception:
+                    pass
             if cell_idx is None:
                 continue
-            cached = self._focus_frames_cache.get(uid)
-            if cached is None:
-                continue
-            try:
-                seq, frame = cached
-                self.grid.set_frame(cell_idx, (seq, frame))
-                restored += 1
-            except Exception:
-                pass
 
-        n = len(uids)
-        if n <= 4:
-            stagger = 40
-        elif n <= 8:
-            stagger = 30
-        elif n <= 16:
-            stagger = 22
-        elif n <= 32:
-            stagger = 15
-        else:
-            stagger = 10
+            # Prefer the freshest decoder frame. The cached frame is only
+            # a fallback for the tiny hand-off window.
+            restored_frame = None
+            if r is not None:
+                try:
+                    latest = r.get_latest_frame()
+                    if latest is not None:
+                        restored_frame = (r.get_latest_frame_seq(), latest)
+                except Exception:
+                    pass
+            if restored_frame is None:
+                restored_frame = self._focus_frames_cache.get(uid)
+            if restored_frame is not None:
+                try:
+                    self.grid.set_frame(cell_idx, restored_frame)
+                    restored += 1
+                except Exception:
+                    pass
 
-        total_ms = n * stagger
-        print(f"[focus] resuming {len(uids)} grid readers "
-              f"({restored} frames restored, stagger={stagger}ms, "
-              f"~{total_ms}ms total)")
+        # No reconnect, no stagger, no FFmpeg/RTSP startup.
+        # Readers have remained alive throughout Focus.
+        print(f"[focus] resumed {len(uids)} grid readers "
+              f"(restored {restored} cached/latest frames; no reconnect)")
 
         self._focus_resume_started = time.monotonic()
-        self._focus_resume_total = n
+        self._focus_resume_total = len(uids)
+        self._focus_resume_done = len(uids)
+        self._focus_resume_total = 0
         self._focus_resume_done = 0
-
-        e = self._clear_epoch
-        for i, uid in enumerate(uids):
-            if uid in self.uid_to_cell:
-                QTimer.singleShot(
-                    i * stagger,
-                    lambda u=uid, ee=e: self._start_grid_reader_with_progress(u, ee))
-
+        self.status_lbl.setText("آماده")
         self._focus_frames_cache = {}
 
     def _start_grid_reader_with_progress(self, uid, epoch):
