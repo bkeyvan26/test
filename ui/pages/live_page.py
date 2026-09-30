@@ -502,7 +502,8 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             self._save_state_to_disk()
 
     def _schedule_prewarm_visible(self):
-        self._prewarm_coalesce_timer.start(PREWARM_COALESCE_MS)
+        if PREWARM_TOP_N > 0:
+            self._prewarm_coalesce_timer.start(PREWARM_COALESCE_MS)
 
     def _prewarm_visible_cameras(self):
         if self._shutting_down or self._clearing:
@@ -519,6 +520,8 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             visible.remove(self._fullscreen_uid)
             visible.insert(0, self._fullscreen_uid)
 
+        if PREWARM_TOP_N <= 0:
+            return
         visible = visible[:PREWARM_TOP_N]
 
         queue = []
@@ -929,10 +932,10 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         if uid in self.single_readers or uid in self._prewarm_in_flight:
             return
 
-        if uid in self._prewarm_queue:
-            self._prewarm_queue.remove(uid)
-        self._prewarm_queue.insert(0, uid)
-        # Start immediately instead of waiting for the normal 600ms batch.
+        # Demand-driven prewarm: only prepare the camera under the cursor.
+        self._prewarm_queue = [u for u in self._prewarm_queue if u == uid]
+        if uid not in self._prewarm_queue:
+            self._prewarm_queue.insert(0, uid)
         self._drain_prewarm_queue(self._clear_epoch)
 
     def _on_cell_clicked(self, idx):
@@ -1124,8 +1127,7 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
             self.cell_source[idx] = "grid"
             return
 
-        self._schedule_focus_pause()
-
+        # Fullscreen is immediate; the grid reader remains the visual bridge.
         if cam.live_profile_id == cam.grid_profile_id:
             self._pending_switch = None
             print(f"[SWITCH] SAME_PROFILE uid={uid}")
@@ -1202,9 +1204,6 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
         self._pending_switch = None
         self.grid.exit_fullscreen()
 
-        self._cancel_focus_pause()
-        if self._focus_paused:
-            self._resume_grid_after_focus()
 
     def _on_cell_close(self, idx):
         uid = self.cell_to_uid.pop(idx, None)
