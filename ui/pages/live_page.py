@@ -558,7 +558,7 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
 
             if len(self.single_readers) >= self.MAX_PREWARM_SINGLE_READERS:
                 if not self._evict_lru_single_reader():
-                    print("[prewarm] limit reached; dropping queue")
+                    print("[prewarm] cache full; keeping existing readers and dropping remainder")
                     self._prewarm_queue = []
                     return
 
@@ -604,9 +604,11 @@ class LivePage(BasePage, LiveContextMenuMixin, LivePersistenceMixin):
     def _evict_lru_single_reader(self):
         if not self.single_readers:
             return False
+        visible_uids = set(self.cell_to_uid.values())
         candidates = [
             (uid, t) for uid, t in self._single_last_used.items()
             if uid in self.single_readers
+            and uid not in visible_uids
             and uid != self._fullscreen_uid
             and uid != self._pending_switch
             and uid not in self._prewarm_in_flight
