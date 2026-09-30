@@ -50,11 +50,11 @@ LIVE_RTSP_TRANSPORT = "udp"
 LIVE_MAX_SINGLE_READERS = 3
 LIVE_SINGLE_IDLE_SEC = 600
 
-LIVE_PREWARM_COALESCE_MS = 600
-LIVE_PREWARM_STAGGER_MS = 200
+LIVE_PREWARM_COALESCE_MS = 0
+LIVE_PREWARM_STAGGER_MS = 0
 LIVE_PREWARM_STUCK_SEC = 30
-LIVE_PREWARM_CONCURRENCY = 1
-LIVE_PREWARM_TOP_N = 3
+LIVE_PREWARM_CONCURRENCY = 2
+LIVE_PREWARM_TOP_N = 0
 
 LIVE_SINGLE_FPS_CAP = 15
 
@@ -62,7 +62,7 @@ LIVE_SINGLE_FPS_CAP = 15
 # وقتی روی یک دوربین دابل‌کلیک می‌کنی (Single)، بقیه Grid readerها
 # موقتاً متوقف می‌شوند تا CPU برای دوربین focused آزاد شود.
 # با خروج از Single، خودکار برمی‌گردند.
-LIVE_FOCUS_OPTIMIZE = True
+LIVE_FOCUS_OPTIMIZE = False
 
 # ============================================================
 # ★ Transport — 3-level priority:
