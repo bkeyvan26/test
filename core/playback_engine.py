@@ -808,6 +808,16 @@ class PlaybackEngine(QObject):
             self._fps = float(seg.get("fps") or self._fps or 25.0)
 
     def _advance_after_eof(self):
+        # EOF from FFmpeg can arrive before the reader queue has been drained.
+        # Never spawn the next FFmpeg process while decoded frames are still
+        # waiting; high-resolution cameras can otherwise create a rapid
+        # process-spawn storm and appear to freeze the UI.
+        if self._reader is not None:
+            try:
+                if self._reader.queue.qsize() > 0:
+                    return
+            except Exception:
+                pass
         if self._group_idx < 0:
             return
         next_group = self._group_idx + 1
