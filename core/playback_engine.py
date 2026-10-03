@@ -420,10 +420,17 @@ class PlaybackEngine(QObject):
 
         # Reuse the existing session whenever the seek stays in the same
         # contiguous run. This avoids needless FFmpeg churn.
+        # Open only from the selected recording segment onward.
+        # Seeking against a 6+ hour concat manifest makes FFmpeg scan a huge
+        # virtual timeline before producing the first frame. Starting the
+        # manifest at the target segment keeps seek latency bounded to the
+        # current TS file while preserving seamless continuation.
         if self._group_idx != getattr(self, "_session_group_idx", -1):
-            self._open_group(group, target - group["start"], group_idx)
+            self._open_from_segment(
+                group, seg_idx, target - seg["start"], group_idx)
         else:
-            self._restart_group_seek(group, target - group["start"])
+            self._restart_from_segment(
+                group, seg_idx, target - seg["start"], group_idx)
 
         if self._proc is None:
             self._set_state("error")
@@ -495,6 +502,137 @@ class PlaybackEngine(QObject):
             "-f", "rawvideo", "-pix_fmt", "rgb24",
             "-"
         ]
+
+    def _write_manifest_from_segment(self, group, start_idx):
+        """Create a bounded concat manifest beginning at one real TS segment.
+
+        The old implementation built a manifest for the entire contiguous
+        run and then used -ss against that virtual timeline. For long runs
+        this can make a seek depend on hours of media before the target.
+        Starting at the target segment makes random access predictable.
+        """
+        segments = group.get("segments") or []
+        start_idx = max(0, min(int(start_idx), len(segments)))
+        if start_idx >= len(segments):
+            return None
+
+        fd, path = tempfile.mkstemp(prefix="k1pb_", suffix=".ffconcat")
+        os.close(fd)
+        try:
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                f.write("ffconcat version 1.0\n")
+                for seg in segments[start_idx:]:
+                    f.write(f"file '{self._escape_concat_path(seg['path'])}'\n")
+                    if seg.get("duration"):
+                        f.write(f"duration {float(seg['duration']):.6f}\n")
+            return path
+        except Exception:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+            return None
+
+    def _open_from_segment(self, group, seg_idx, offset, group_idx):
+        """Start decoding from a real segment near the requested position."""
+        self._close_session()
+        if not self._ffmpeg:
+            return
+
+        group_segments = group.get("segments") or []
+        try:
+            local_idx = next(
+                i for i, seg in enumerate(group_segments)
+                if seg is self._segments[seg_idx]
+            )
+        except Exception:
+            # Fall back to matching by path/start when object identity is not
+            # available.
+            local_idx = 0
+            if 0 <= seg_idx < len(self._segments):
+                target = self._segments[seg_idx]
+                for i, candidate in enumerate(group_segments):
+                    if (candidate.get("path") == target.get("path") and
+                            abs(float(candidate.get("start", 0)) -
+                                float(target.get("start", 0))) < 0.001):
+                        local_idx = i
+                        break
+
+        manifest = self._write_manifest_from_segment(group, local_idx)
+        if not manifest:
+            return
+
+        self._manifest_path = manifest
+        try:
+            proc = subprocess.Popen(
+                self._build_ffmpeg_cmd(manifest, max(0.0, offset)),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                bufsize=self.OUT_W * self.OUT_H * 3 * 8,
+                **_spawn_kwargs()
+            )
+            self._proc = proc
+            self._reader = _FrameReader(
+                proc, self.OUT_W * self.OUT_H * 3,
+                self.OUT_H, self.OUT_W)
+            self._reader.start()
+            self._session_group_idx = group_idx
+            try:
+                if self._active_trace:
+                    self._active_trace.mark(
+                        "FFMPEG_SPAWN_END", pid=proc.pid,
+                        group=f"{group['start']:.2f}-{group['end']:.2f}",
+                        segment_index=str(seg_idx),
+                        seek_offset=f"{float(offset):.3f}")
+            except Exception:
+                pass
+        except Exception as exc:
+            print(f"[PlaybackEngine] session spawn failed: {exc}")
+            self._close_session()
+
+    def _restart_from_segment(self, group, seg_idx, offset, group_idx):
+        """Restart a seek without rebuilding the whole day's concat timeline."""
+        self._close_process_only()
+        group_segments = group.get("segments") or []
+        local_idx = 0
+        if 0 <= seg_idx < len(self._segments):
+            target = self._segments[seg_idx]
+            for i, candidate in enumerate(group_segments):
+                if (candidate.get("path") == target.get("path") and
+                        abs(float(candidate.get("start", 0)) -
+                            float(target.get("start", 0))) < 0.001):
+                    local_idx = i
+                    break
+
+        manifest = self._write_manifest_from_segment(group, local_idx)
+        if not manifest:
+            return
+        self._manifest_path = manifest
+        try:
+            proc = subprocess.Popen(
+                self._build_ffmpeg_cmd(manifest, max(0.0, offset)),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                bufsize=self.OUT_W * self.OUT_H * 3 * 8,
+                **_spawn_kwargs()
+            )
+            self._proc = proc
+            self._reader = _FrameReader(
+                proc, self.OUT_W * self.OUT_H * 3,
+                self.OUT_H, self.OUT_W)
+            self._reader.start()
+            self._session_group_idx = group_idx
+            try:
+                if self._active_trace:
+                    self._active_trace.mark(
+                        "FFMPEG_SEEK_SPAWN_END", pid=proc.pid,
+                        segment_index=str(seg_idx),
+                        seek_offset=f"{float(offset):.3f}")
+            except Exception:
+                pass
+        except Exception as exc:
+            print(f"[PlaybackEngine] seek spawn failed: {exc}")
+            self._close_session()
 
     def _open_group(self, group, offset, group_idx):
         self._close_session()
@@ -654,8 +792,16 @@ class PlaybackEngine(QObject):
         # recorded frame of the next run, like professional VMS clients.
         self._group_idx = next_group
         next_idx = self._find_segment(group["start"])
-        self._segment_idx = next_idx if next_idx is not None else self._segment_idx
-        self._open_group(group, 0.0, next_group)
+        if next_idx is None:
+            self._is_playing = False
+            self._tick_timer.stop()
+            self._set_state("ended")
+            return
+        self._segment_idx = next_idx
+        self._position = group["start"]
+        self._fps = float(
+            self._segments[next_idx].get("fps") or self._fps or 25.0)
+        self._open_from_segment(group, next_idx, 0.0, next_group)
         self._awaiting_first_frame = True
         self.position_changed.emit(self._position)
 
@@ -664,6 +810,11 @@ class PlaybackEngine(QObject):
             if hasattr(frame, "flags") and not frame.flags["C_CONTIGUOUS"]:
                 frame = np.ascontiguousarray(frame)
             self._last_frame = frame
+            try:
+                if self._active_trace:
+                    self._active_trace.mark_once("FIRST_FRAME_EMITTED")
+            except Exception:
+                pass
             self.frame_ready.emit(frame)
         except Exception:
             pass
