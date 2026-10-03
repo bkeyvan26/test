@@ -105,7 +105,23 @@ class RecordingIndexer:
     # ---------- public ----------
     def get_day_index(self, cam_name: str, day: datetime.date) -> DayIndex:
         date_str = day.strftime("%Y-%m-%d")
-        self.sync_day(cam_name, date_str)
+
+        # Historical recording days are normally immutable. Re-scanning every
+        # TS file on each calendar click makes large days unnecessarily slow.
+        # Today is always synchronized; an older day is synchronized only when
+        # the database has no cached rows for it.
+        should_sync = day >= datetime.date.today()
+        if not should_sync:
+            row = self.db.execute(
+                "SELECT COUNT(*) AS n FROM segments "
+                "WHERE camera_name=? AND date=?",
+                (cam_name, date_str),
+            ).fetchone()
+            should_sync = not row or int(row["n"] or 0) == 0
+
+        if should_sync:
+            self.sync_day(cam_name, date_str)
+
         segments = self._load_segments(cam_name, date_str)
         gaps = self._compute_gaps(segments)
         print(f"[Indexer] {cam_name} {date_str}: {len(segments)} segments, {len(gaps)} gaps")
