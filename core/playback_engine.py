@@ -57,7 +57,7 @@ class _FrameReader(threading.Thread):
         self.frame_size = frame_size
         self.out_h = out_h
         self.out_w = out_w
-        self.queue = queue.Queue(maxsize=8)
+        self.queue = queue.Queue(maxsize=48)
         self._halt = threading.Event()
         self._eof = False
 
@@ -117,10 +117,10 @@ class PlaybackEngine(QObject):
     state_changed = Signal(str)
     segment_changed = Signal(int)
 
-    TICK_MS = 20
+    TICK_MS = 16
     SEEK_DEBOUNCE_MS = 90
     MIN_SPEED = 0.25
-    MAX_SPEED = 4.0
+    MAX_SPEED = 16.0
     OUT_W = 640
     OUT_H = 360
     GAP_TOLERANCE_SEC = 1.25
@@ -741,29 +741,36 @@ class PlaybackEngine(QObject):
             self._last_tick = now
             return
 
-        elapsed = min(0.20, max(0.0, now - self._last_tick))
+        elapsed = min(0.10, max(0.0, now - self._last_tick))
         self._last_tick = now
         self._frame_accumulator += elapsed * self._speed
 
         frame_interval = 1.0 / max(1.0, self._fps)
         frames_due = int(self._frame_accumulator / frame_interval)
-        if frames_due <= 0:
-            return
-        frames_due = min(frames_due, 8)
-        self._frame_accumulator -= frames_due * frame_interval
 
-        last = None
-        for _ in range(frames_due):
-            frame = self._reader.get_nowait() if self._reader else None
-            if frame is None:
-                break
-            last = frame
-            self._position += frame_interval
-        if last is not None:
-            self._awaiting_first_frame = False
-            self._emit_frame(last)
-            self.position_changed.emit(self._position)
-            self._update_segment_from_position()
+        if frames_due > 0:
+            # At high speed consume the decoder backlog and present only the
+            # newest decoded frame. This keeps playback responsive up to 16x.
+            frames_due = min(frames_due, 64)
+            last = None
+            consumed = 0
+            for _ in range(frames_due):
+                frame = self._reader.get_nowait() if self._reader else None
+                if frame is None:
+                    break
+                last = frame
+                consumed += 1
+            self._frame_accumulator -= consumed * frame_interval
+            if last is not None:
+                self._awaiting_first_frame = False
+                self._emit_frame(last)
+                self._position += consumed * frame_interval
+                self.position_changed.emit(self._position)
+                self._update_segment_from_position()
+        elif self._last_frame is not None:
+            # Keep the displayed frame stable during slow motion rather than
+            # dropping visible updates and making 1/3x or 1/2x look choppy.
+            self._emit_frame(self._last_frame)
 
         reader = self._reader
         if reader is not None and reader.is_eof():
