@@ -57,7 +57,7 @@ class _FrameReader(threading.Thread):
         self.frame_size = frame_size
         self.out_h = out_h
         self.out_w = out_w
-        self.queue = queue.Queue(maxsize=48)
+        self.queue = queue.Queue(maxsize=12)
         self._halt = threading.Event()
         self._eof = False
 
@@ -87,17 +87,14 @@ class _FrameReader(threading.Thread):
                 frame = np.frombuffer(raw, np.uint8).reshape(
                     (self.out_h, self.out_w, 3))
                 try:
-                    self.queue.put_nowait(frame)
-                except queue.Full:
-                    # Playback must prefer the newest frame over latency.
-                    try:
-                        self.queue.get_nowait()
-                    except queue.Empty:
-                        pass
-                    try:
-                        self.queue.put_nowait(frame)
-                    except queue.Full:
-                        pass
+                    # Never discard decoded frames. Dropping from the head makes
+                    # the Python playback clock point at one timestamp while
+                    # the queue displays another, which causes apparent 2x/4x
+                    # playback and makes speed changes ineffective.
+                    self.queue.put(frame, timeout=0.25)
+                except Exception:
+                    if self._halt.is_set():
+                        break
             except Exception:
                 continue
 
@@ -343,8 +340,13 @@ class PlaybackEngine(QObject):
         self._frame_accumulator = 0.0
         self._last_tick = time.monotonic() if self._is_playing else 0.0
         if self._is_playing:
-            self._play_anchor_position = self._position
-            self._play_anchor_wall = self._last_tick
+            # The decoder may already have buffered frames for the old speed.
+            # Restart exactly at the current logical position so the first
+            # frame after a speed change belongs to that position.
+            current = self._position
+            self._apply_seek(current, force_pause=False)
+            print(f"[PlaybackEngine] speed={self._speed:g}x (restarted at {current:.3f})")
+            return
         print(f"[PlaybackEngine] speed={self._speed:g}x")
 
     # ------------------------------------------------------------
