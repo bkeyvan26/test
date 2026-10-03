@@ -110,6 +110,8 @@ class PlaybackPage(BasePage):
         self._scan_jobs = set()
         self._selected_camera_uid = None
         self._available_recording_dates = set()
+        self._date_scan_inflight = set()
+        self._date_loading = False
 
         self._build()
         self._load_cameras()
@@ -1018,8 +1020,19 @@ class PlaybackPage(BasePage):
         if cam is None:
             return
 
+        key = (uid, date_obj)
+        if key in self._date_scan_inflight:
+            return
+
         self._scan_generation += 1
         generation = self._scan_generation
+        self._date_scan_inflight.add(key)
+        self._date_loading = True
+        self.date_lbl.setText("⏳ در حال بارگذاری تاریخ ضبط…")
+        self.prev_day_btn.setEnabled(False)
+        self.next_day_btn.setEnabled(False)
+        self.today_btn.setEnabled(False)
+        self.calendar.setEnabled(False)
         cell.set_loading(True, "در حال آماده‌سازی نوار زمان…")
         self.timeline.set_segments([])
         self.timeline.setEnabled(False)
@@ -1029,8 +1042,14 @@ class PlaybackPage(BasePage):
 
         def _done(segments):
             self._scan_jobs.discard(job)
+            self._date_scan_inflight.discard(key)
             if generation != self._scan_generation:
                 return
+            self._date_loading = False
+            self.calendar.setEnabled(True)
+            self.prev_day_btn.setEnabled(True)
+            self.next_day_btn.setEnabled(True)
+            self.today_btn.setEnabled(True)
             self.grid.assign_to_cell(
                 idx, uid, cam.name or uid, date_obj, segments)
             self.grid._active_idx = idx
@@ -1045,11 +1064,19 @@ class PlaybackPage(BasePage):
                   f"{len(segments)} segments")
             if segments:
                 cell.engine().set_position_hint(segments[0]["start"])
+                speed_map = {0: 1/3, 1: 0.5, 2: 0.75, 3: 1.0, 4: 2.0, 5: 4.0, 6: 8.0, 7: 16.0}
+                cell.engine().set_speed(speed_map.get(self.speed_slider.value(), 1.0))
 
         def _failed(message):
             self._scan_jobs.discard(job)
+            self._date_scan_inflight.discard(key)
             if generation != self._scan_generation:
                 return
+            self._date_loading = False
+            self.calendar.setEnabled(True)
+            self.prev_day_btn.setEnabled(True)
+            self.next_day_btn.setEnabled(True)
+            self.today_btn.setEnabled(True)
             print(f"[playback.date-scan] {message}")
             cell.set_loading(False)
 
