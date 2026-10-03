@@ -37,6 +37,57 @@ def _fmt_hms(seconds):
     return f"{s//3600:02d}:{(s%3600)//60:02d}:{s%60:02d}"
 
 
+class _PlaybackLoadingOverlay(QFrame):
+    """Single central playback loader; never sits on top of an individual camera tile."""
+    _FRAMES = ("◐", "◓", "◑", "◒")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setStyleSheet(
+            "QFrame { background: rgba(5, 8, 12, 185); border: none; }"
+        )
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 20, 20, 20)
+        lay.setSpacing(5)
+        lay.setAlignment(Qt.AlignCenter)
+
+        self.icon = QLabel(self._FRAMES[0])
+        self.icon.setAlignment(Qt.AlignCenter)
+        self.icon.setStyleSheet(
+            f"color: {theme.COLOR_ACCENT}; font-size: 42px; font-weight: 700;"
+        )
+        lay.addWidget(self.icon)
+
+        self.text = QLabel("در حال آماده‌سازی پخش…")
+        self.text.setAlignment(Qt.AlignCenter)
+        self.text.setStyleSheet(
+            f"color: {theme.COLOR_TEXT_PRIMARY}; font-size: 11px; font-weight: 700;"
+        )
+        lay.addWidget(self.text)
+
+        self._frame = 0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._spin)
+        self.hide()
+
+    def _spin(self):
+        self._frame = (self._frame + 1) % len(self._FRAMES)
+        self.icon.setText(self._FRAMES[self._frame])
+
+    def show_loading(self, text="در حال آماده‌سازی پخش…"):
+        self.text.setText(text)
+        self._frame = 0
+        self.icon.setText(self._FRAMES[0])
+        self.raise_()
+        self.show()
+        self._timer.start(90)
+
+    def hide_loading(self):
+        self._timer.stop()
+        self.hide()
+
+
 class _ScanSignals(QObject):
     finished = Signal(object)
     failed = Signal(str)
@@ -292,12 +343,15 @@ class PlaybackPage(BasePage):
 
         self.grid = PlaybackGrid()
         self.grid.set_layout("2x2")
+        self.playback_overlay = _PlaybackLoadingOverlay(self.grid)
+        self.playback_overlay.setGeometry(self.grid.rect())
         self.grid.cell_clicked.connect(self._on_cell_clicked)
         self.grid.cell_double_clicked.connect(self._on_cell_double_clicked)
         self.grid.cell_context.connect(self._on_cell_context)
         self.grid.camera_dropped.connect(self._on_camera_dropped)
         self.grid.cell_state.connect(self._on_cell_state)
         self.grid.cell_position.connect(self._on_cell_position)
+        self.grid.cell_frame_ready.connect(self._on_cell_frame_ready)
         self.grid.fullscreen_about_to_change.connect(
             self._on_fs_about_to_change)
         v.addWidget(self.grid, 1)
@@ -606,6 +660,13 @@ class PlaybackPage(BasePage):
         )
         return l
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        try:
+            self.playback_overlay.setGeometry(self.grid.rect())
+        except Exception:
+            pass
+
     # ============================================================
     def _load_cameras(self):
         self.cam_list.blockSignals(True)
@@ -739,8 +800,7 @@ class PlaybackPage(BasePage):
         self.info_rows["count"].setText("—")
 
         cell = self.grid.get_cell(idx)
-        if cell:
-            cell.set_loading(True, "در حال بررسی تاریخ‌های ضبط…")
+        self._show_playback_loading("در حال بررسی تاریخ‌های ضبط…")
         try:
             ActivityBus.instance().show(
                 t_load("playback_scan", camera=cam.name or uid))
@@ -764,8 +824,7 @@ class PlaybackPage(BasePage):
             self._bind_active_cell()
             self._update_info_panel()
             self._update_panel_segments()
-            if cell:
-                cell.set_loading(False)
+            self._hide_playback_loading()
             ActivityBus.instance().hide()
             print(f"[playback] camera selected {cam.name} — "
                   f"{len(self._available_recording_dates)} recording dates")
@@ -775,8 +834,7 @@ class PlaybackPage(BasePage):
             if generation != self._scan_generation:
                 return
             print(f"[playback.camera-scan] {message}")
-            if cell:
-                cell.set_loading(False)
+            self._hide_playback_loading()
             ActivityBus.instance().hide()
 
         job.signals.finished.connect(_done)
@@ -910,6 +968,19 @@ class PlaybackPage(BasePage):
         if key:
             self.grid.set_layout(key)
 
+    def _show_playback_loading(self, text="در حال آماده‌سازی پخش…"):
+        try:
+            self.playback_overlay.setGeometry(self.grid.rect())
+            self.playback_overlay.show_loading(text)
+        except Exception:
+            pass
+
+    def _hide_playback_loading(self):
+        try:
+            self.playback_overlay.hide_loading()
+        except Exception:
+            pass
+
     # ============================================================
     def _active_engine(self):
         cell = self.grid.get_active_cell()
@@ -930,12 +1001,16 @@ class PlaybackPage(BasePage):
                 eng.set_active_trace(t)
         except Exception:
             pass
+        was_playing = eng.is_playing()
         eng.toggle()
+        if not was_playing:
+            self._show_playback_loading("در حال آماده‌سازی پخش…")
 
     def _stop(self):
         eng = self._active_engine()
         if eng:
             eng.stop()
+        self._hide_playback_loading()
 
     def _step(self, direction):
         eng = self._active_engine()
@@ -983,6 +1058,7 @@ class PlaybackPage(BasePage):
             eng.set_active_trace(t)
         except Exception:
             pass
+        self._show_playback_loading("در حال رفتن به زمان انتخاب‌شده…")
         eng.request_seek(seconds)
 
     def _on_cell_state(self, idx, state):
@@ -990,8 +1066,14 @@ class PlaybackPage(BasePage):
             return
         if state == "playing":
             self.btn_play.setIcon(make_icon("pause", "white", 20))
-        elif state in ("ended", "gap", "idle"):
+        elif state in ("paused", "ended", "gap", "idle", "stopped", "error"):
             self.btn_play.setIcon(make_icon("play-circle", "white", 20))
+        if state in ("ended", "gap", "error"):
+            self._hide_playback_loading()
+
+    def _on_cell_frame_ready(self, idx):
+        if idx == self.grid.get_active_idx():
+            self._hide_playback_loading()
 
     def _on_cell_position(self, idx, seconds):
         if idx != self.grid.get_active_idx():
@@ -1033,7 +1115,7 @@ class PlaybackPage(BasePage):
         self.next_day_btn.setEnabled(False)
         self.today_btn.setEnabled(False)
         self.calendar.setEnabled(False)
-        cell.set_loading(True, "در حال آماده‌سازی نوار زمان…")
+        self._show_playback_loading("در حال آماده‌سازی نوار زمان…")
         self.timeline.set_segments([])
         self.timeline.setEnabled(False)
 
@@ -1059,7 +1141,7 @@ class PlaybackPage(BasePage):
             self._update_info_panel()
             self._update_panel_segments()
             self._update_date_label(date_obj)
-            cell.set_loading(False)
+            self._hide_playback_loading()
             print(f"[playback] date selected {date_obj}: "
                   f"{len(segments)} segments")
             if segments:
@@ -1078,7 +1160,7 @@ class PlaybackPage(BasePage):
             self.next_day_btn.setEnabled(True)
             self.today_btn.setEnabled(True)
             print(f"[playback.date-scan] {message}")
-            cell.set_loading(False)
+            self._hide_playback_loading()
 
         job.signals.finished.connect(_done)
         job.signals.failed.connect(_failed)
@@ -1219,6 +1301,34 @@ class PlaybackPage(BasePage):
             w.showNormal()
         else:
             w.showFullScreen()
+
+    # ============================================================
+    def shutdown(self):
+        """Stop every playback decoder before the application closes.
+
+        Playback engines are intentionally lazy, but any engine that has been
+        used owns an FFmpeg process/thread. Close them deterministically so a
+        high-resolution playback session can never keep the application alive.
+        """
+        self._scan_generation += 1
+        self._date_scan_inflight.clear()
+        self._hide_playback_loading()
+        try:
+            for cell in list(self.grid.get_cells()):
+                try:
+                    cell.mark_dead()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            for job in list(self._scan_jobs):
+                # QRunnable jobs are not forcibly killed; generation invalidates
+                # their UI callbacks, while decoder shutdown remains immediate.
+                pass
+            self._scan_jobs.clear()
+        except Exception:
+            pass
 
     # ============================================================
     def build_panel_content(self):
