@@ -368,8 +368,8 @@ class PlaybackPage(BasePage):
         th.addWidget(sp_lbl)
 
         self.speed_slider = QSlider(Qt.Horizontal)
-        self.speed_slider.setRange(0, 4)
-        self.speed_slider.setValue(1)
+        self.speed_slider.setRange(0, 7)
+        self.speed_slider.setValue(3)
         self.speed_slider.setFixedWidth(90)
         self.speed_slider.setCursor(Qt.PointingHandCursor)
         self.speed_slider.valueChanged.connect(self._on_speed_slider)
