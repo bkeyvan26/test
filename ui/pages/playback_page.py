@@ -156,7 +156,13 @@ class PlaybackPage(BasePage):
         self._cut_in = None
         self._cut_out = None
         self._scan_cache = {}
-        self._scan_pool = QThreadPool.globalInstance()
+        # Playback indexing is intentionally isolated and capped. A global
+        # pool can otherwise launch many FFprobe/filesystem scans when a user
+        # clicks dates/cameras rapidly, starving the rest of the VMS as the
+        # camera count grows into the hundreds.
+        self._scan_pool = QThreadPool(self)
+        self._scan_pool.setMaxThreadCount(2)
+        self._scan_pool.setExpiryTimeout(15000)
         self._scan_generation = 0
         self._scan_jobs = set()
         self._selected_camera_uid = None
