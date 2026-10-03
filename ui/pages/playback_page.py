@@ -1074,7 +1074,7 @@ class PlaybackPage(BasePage):
             self.btn_play.setIcon(make_icon("pause", "white", 20))
         elif state in ("paused", "ended", "gap", "idle", "stopped", "error"):
             self.btn_play.setIcon(make_icon("play-circle", "white", 20))
-        if state in ("ended", "gap", "error"):
+        if state in ("paused", "ended", "gap", "error"):
             self._hide_playback_loading()
 
     def _on_cell_frame_ready(self, idx):
