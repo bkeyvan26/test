@@ -960,7 +960,7 @@ class PlaybackPage(BasePage):
             eng.seek(segs[idx + 1]["start"])
 
     def _on_speed_slider(self, value):
-        speed_map = {0: 0.5, 1: 1.0, 2: 2.0, 3: 3.0, 4: 4.0}
+        speed_map = {0: 1/3, 1: 0.5, 2: 0.75, 3: 1.0, 4: 2.0, 5: 4.0, 6: 8.0, 7: 16.0}
         s = speed_map.get(value, 1.0)
         self.speed_lbl.setText(f"{s:g}x")
         eng = self._active_engine()
