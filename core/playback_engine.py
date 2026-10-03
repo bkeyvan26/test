@@ -282,8 +282,6 @@ class PlaybackEngine(QObject):
         self._is_playing = True
         self._set_state("playing")
         now = time.monotonic()
-        self._play_anchor_wall = now
-        self._play_anchor_position = self._position
         self._last_tick = now
         self._frame_accumulator = 0.0
         self._tick_timer.start(self.TICK_MS)
@@ -291,14 +289,11 @@ class PlaybackEngine(QObject):
     def pause(self):
         if not self._is_playing:
             return
-        if self._is_playing and self._play_anchor_wall > 0:
-            now = time.monotonic()
-            self._position = self._play_anchor_position + (now - self._play_anchor_wall) * self._speed
-            self.position_changed.emit(self._position)
         self._is_playing = False
         self._tick_timer.stop()
         self._last_tick = 0.0
         self._play_anchor_wall = 0.0
+        self._play_anchor_position = self._position
         self._frame_accumulator = 0.0
         self._set_state("paused")
 
@@ -330,23 +325,13 @@ class PlaybackEngine(QObject):
         value = max(self.MIN_SPEED, min(self.MAX_SPEED, value))
         if abs(value - self._speed) < 1e-9:
             return
-        if self._is_playing and self._play_anchor_wall > 0:
-            now = time.monotonic()
-            self._position = self._play_anchor_position + (now - self._play_anchor_wall) * self._speed
-            self.position_changed.emit(self._position)
-            self._play_anchor_position = self._position
-            self._play_anchor_wall = now
+        # Speed is a presentation-clock setting. Do not restart FFmpeg:
+        # restarting on every slider movement caused decoder churn, long
+        # black/loading periods, and made rapid speed changes feel ineffective.
         self._speed = value
         self._frame_accumulator = 0.0
-        self._last_tick = time.monotonic() if self._is_playing else 0.0
         if self._is_playing:
-            # The decoder may already have buffered frames for the old speed.
-            # Restart exactly at the current logical position so the first
-            # frame after a speed change belongs to that position.
-            current = self._position
-            self._apply_seek(current, force_pause=False)
-            print(f"[PlaybackEngine] speed={self._speed:g}x (restarted at {current:.3f})")
-            return
+            self._last_tick = time.monotonic()
         print(f"[PlaybackEngine] speed={self._speed:g}x")
 
     # ------------------------------------------------------------
@@ -524,9 +509,12 @@ class PlaybackEngine(QObject):
         return [
             self._ffmpeg,
             "-hide_banner", "-loglevel", "error",
-            "-threads", "2",
+            "-threads", "3",
             "-fflags", "+genpts+discardcorrupt",
             "-f", "concat", "-safe", "0",
+            # Fast VMS-style seek: land on the nearest keyframe instead of
+            # decoding a long pre-roll before the first visible frame.
+            "-noaccurate_seek",
             "-ss", f"{max(0.0, offset):.3f}",
             "-i", manifest,
             "-an", "-sn",
@@ -771,37 +759,42 @@ class PlaybackEngine(QObject):
             return
 
         now = time.monotonic()
-        if self._play_anchor_wall <= 0:
-            self._play_anchor_wall = now
-            self._play_anchor_position = self._position
+        if self._last_tick <= 0:
+            self._last_tick = now
+        dt = max(0.0, min(0.25, now - self._last_tick))
+        self._last_tick = now
 
-        # Wall-clock master: FFmpeg decode speed can no longer accelerate
-        # playback. Speed changes alter only the presentation clock.
-        target = self._play_anchor_position + (now - self._play_anchor_wall) * self._speed
         fps = max(1.0, min(60.0, float(self._fps or 25.0)))
-        desired = int(max(0.0, target - self._decode_origin_position) * fps)
-        needed = desired - self._decoded_frames
+        # Presentation clock: position advances only when a decoded frame is
+        # actually presented. This prevents the timeline from racing ahead
+        # while FFmpeg is still decoding a difficult/high-quality stream.
+        self._frame_accumulator += dt * fps * self._speed
+        budget = int(self._frame_accumulator)
+        if budget > 0:
+            self._frame_accumulator -= budget
 
-        last = None
-        if needed > 0:
-            needed = min(needed, 256)
-            for _ in range(needed):
-                frame = self._reader.get_nowait() if self._reader else None
+        reader = self._reader
+        if reader is None:
+            return
+
+        available = reader.queue.qsize()
+        if budget > 0 and available > 0:
+            take = min(budget, available, 256)
+            last = None
+            for _ in range(take):
+                frame = reader.get_nowait()
                 if frame is None:
                     break
                 last = frame
                 self._decoded_frames += 1
+                self._position += 1.0 / fps
+            if last is not None:
+                self._awaiting_first_frame = False
+                self._emit_frame(last)
+                self.position_changed.emit(self._position)
+                self._update_segment_from_position()
 
-        if last is not None:
-            self._awaiting_first_frame = False
-            self._emit_frame(last)
-
-        self._position = target
-        self.position_changed.emit(self._position)
-        self._update_segment_from_position()
-
-        reader = self._reader
-        if reader is not None and reader.is_eof():
+        if reader.is_eof():
             self._advance_after_eof()
 
     def _update_segment_from_position(self):
@@ -836,8 +829,8 @@ class PlaybackEngine(QObject):
         self._position = group["start"]
         self._decode_origin_position = self._position
         self._decoded_frames = 0
-        self._play_anchor_position = self._position
-        self._play_anchor_wall = time.monotonic()
+        self._last_tick = time.monotonic()
+        self._frame_accumulator = 0.0
         self._fps = float(
             self._segments[next_idx].get("fps") or self._fps or 25.0)
         self._open_from_segment(group, next_idx, 0.0, next_group)
