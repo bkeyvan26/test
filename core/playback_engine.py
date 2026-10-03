@@ -510,7 +510,9 @@ class PlaybackEngine(QObject):
             self._ffmpeg,
             "-hide_banner", "-loglevel", "error",
             "-threads", "3",
-            "-fflags", "+genpts+discardcorrupt",
+            "-fflags", "+fastseek+genpts+discardcorrupt",
+            "-probesize", "2M",
+            "-analyzeduration", "500000",
             "-f", "concat", "-safe", "0",
             # Fast VMS-style seek: land on the nearest keyframe instead of
             # decoding a long pre-roll before the first visible frame.
