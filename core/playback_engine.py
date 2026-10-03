@@ -147,6 +147,10 @@ class PlaybackEngine(QObject):
         self._last_frame = None
         self._frame_accumulator = 0.0
         self._last_tick = 0.0
+        self._play_anchor_wall = 0.0
+        self._play_anchor_position = 0.0
+        self._decode_origin_position = 0.0
+        self._decoded_frames = 0
         self._awaiting_first_frame = False
 
         self._pending_seek = None
@@ -280,16 +284,24 @@ class PlaybackEngine(QObject):
                 return
         self._is_playing = True
         self._set_state("playing")
-        self._last_tick = time.monotonic()
+        now = time.monotonic()
+        self._play_anchor_wall = now
+        self._play_anchor_position = self._position
+        self._last_tick = now
         self._frame_accumulator = 0.0
         self._tick_timer.start(self.TICK_MS)
 
     def pause(self):
         if not self._is_playing:
             return
+        if self._is_playing and self._play_anchor_wall > 0:
+            now = time.monotonic()
+            self._position = self._play_anchor_position + (now - self._play_anchor_wall) * self._speed
+            self.position_changed.emit(self._position)
         self._is_playing = False
         self._tick_timer.stop()
         self._last_tick = 0.0
+        self._play_anchor_wall = 0.0
         self._frame_accumulator = 0.0
         self._set_state("paused")
 
@@ -318,9 +330,22 @@ class PlaybackEngine(QObject):
             value = float(speed)
         except (TypeError, ValueError):
             return
-        self._speed = max(self.MIN_SPEED, min(self.MAX_SPEED, value))
+        value = max(self.MIN_SPEED, min(self.MAX_SPEED, value))
+        if abs(value - self._speed) < 1e-9:
+            return
+        if self._is_playing and self._play_anchor_wall > 0:
+            now = time.monotonic()
+            self._position = self._play_anchor_position + (now - self._play_anchor_wall) * self._speed
+            self.position_changed.emit(self._position)
+            self._play_anchor_position = self._position
+            self._play_anchor_wall = now
+        self._speed = value
         self._frame_accumulator = 0.0
         self._last_tick = time.monotonic() if self._is_playing else 0.0
+        if self._is_playing:
+            self._play_anchor_position = self._position
+            self._play_anchor_wall = self._last_tick
+        print(f"[PlaybackEngine] speed={self._speed:g}x")
 
     # ------------------------------------------------------------
     # Seek
@@ -417,6 +442,8 @@ class PlaybackEngine(QObject):
         self._group_idx = group_idx
         self._fps = float(seg.get("fps") or 25.0)
         self._position = target
+        self._decode_origin_position = target
+        self._decoded_frames = 0
 
         # Reuse the existing session whenever the seek stays in the same
         # contiguous run. This avoids needless FFmpeg churn.
@@ -450,7 +477,10 @@ class PlaybackEngine(QObject):
         if was_playing:
             self._is_playing = True
             self._set_state("playing")
-            self._last_tick = time.monotonic()
+            now = time.monotonic()
+            self._play_anchor_wall = now
+            self._play_anchor_position = self._position
+            self._last_tick = now
             self._frame_accumulator = 0.0
             self._tick_timer.start(self.TICK_MS)
         else:
@@ -576,6 +606,8 @@ class PlaybackEngine(QObject):
                 proc, self.OUT_W * self.OUT_H * 3,
                 self.OUT_H, self.OUT_W)
             self._reader.start()
+            self._decode_origin_position = self._position
+            self._decoded_frames = 0
             self._session_group_idx = group_idx
             try:
                 if self._active_trace:
@@ -737,40 +769,34 @@ class PlaybackEngine(QObject):
             return
 
         now = time.monotonic()
-        if self._last_tick <= 0:
-            self._last_tick = now
-            return
+        if self._play_anchor_wall <= 0:
+            self._play_anchor_wall = now
+            self._play_anchor_position = self._position
 
-        elapsed = min(0.10, max(0.0, now - self._last_tick))
-        self._last_tick = now
-        self._frame_accumulator += elapsed * self._speed
+        # Wall-clock master: FFmpeg decode speed can no longer accelerate
+        # playback. Speed changes alter only the presentation clock.
+        target = self._play_anchor_position + (now - self._play_anchor_wall) * self._speed
+        fps = max(1.0, min(60.0, float(self._fps or 25.0)))
+        desired = int(max(0.0, target - self._decode_origin_position) * fps)
+        needed = desired - self._decoded_frames
 
-        frame_interval = 1.0 / max(1.0, self._fps)
-        frames_due = int(self._frame_accumulator / frame_interval)
-
-        if frames_due > 0:
-            # At high speed consume the decoder backlog and present only the
-            # newest decoded frame. This keeps playback responsive up to 16x.
-            frames_due = min(frames_due, 64)
-            last = None
-            consumed = 0
-            for _ in range(frames_due):
+        last = None
+        if needed > 0:
+            needed = min(needed, 256)
+            for _ in range(needed):
                 frame = self._reader.get_nowait() if self._reader else None
                 if frame is None:
                     break
                 last = frame
-                consumed += 1
-            self._frame_accumulator -= consumed * frame_interval
-            if last is not None:
-                self._awaiting_first_frame = False
-                self._emit_frame(last)
-                self._position += consumed * frame_interval
-                self.position_changed.emit(self._position)
-                self._update_segment_from_position()
-        elif self._last_frame is not None:
-            # Keep the displayed frame stable during slow motion rather than
-            # dropping visible updates and making 1/3x or 1/2x look choppy.
-            self._emit_frame(self._last_frame)
+                self._decoded_frames += 1
+
+        if last is not None:
+            self._awaiting_first_frame = False
+            self._emit_frame(last)
+
+        self._position = target
+        self.position_changed.emit(self._position)
+        self._update_segment_from_position()
 
         reader = self._reader
         if reader is not None and reader.is_eof():
@@ -806,6 +832,10 @@ class PlaybackEngine(QObject):
             return
         self._segment_idx = next_idx
         self._position = group["start"]
+        self._decode_origin_position = self._position
+        self._decoded_frames = 0
+        self._play_anchor_position = self._position
+        self._play_anchor_wall = time.monotonic()
         self._fps = float(
             self._segments[next_idx].get("fps") or self._fps or 25.0)
         self._open_from_segment(group, next_idx, 0.0, next_group)
