@@ -18,6 +18,7 @@ class PlaybackGrid(QWidget):
     cell_context = Signal(int, QPoint)
     cell_state = Signal(int, str)
     cell_position = Signal(int, float)
+    cell_frame_ready = Signal(int)
     camera_dropped = Signal(int, str)
     fullscreen_about_to_change = Signal(int)
 
@@ -152,6 +153,7 @@ class PlaybackGrid(QWidget):
             cell.context_requested.connect(self.cell_context.emit)
             cell.state_changed.connect(self.cell_state.emit)
             cell.position_changed.connect(self.cell_position.emit)
+            cell.frame_ready.connect(self.cell_frame_ready.emit)
             cell.close_requested.connect(self.cell_close.emit)
             self._cells.append(cell)
 
