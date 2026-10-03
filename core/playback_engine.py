@@ -818,23 +818,26 @@ class PlaybackEngine(QObject):
             return
 
         group = self._groups[next_group]
-        # A real gap is never fabricated. Playback jumps to the first
-        # recorded frame of the next run, like professional VMS clients.
-        self._group_idx = next_group
         next_idx = self._find_segment(group["start"])
         if next_idx is None:
             self._is_playing = False
             self._tick_timer.stop()
             self._set_state("ended")
             return
+
+        self._group_idx = next_group
         self._segment_idx = next_idx
-        self._position = group["start"]
+        self._position = float(group["start"])
         self._decode_origin_position = self._position
         self._decoded_frames = 0
         self._last_tick = time.monotonic()
         self._frame_accumulator = 0.0
-        self._fps = float(
-            self._segments[next_idx].get("fps") or self._fps or 25.0)
+        self._fps = float(self._segments[next_idx].get("fps") or self._fps or 25.0)
+
+        # Open once at the beginning of the next contiguous run. The previous
+        # implementation could immediately re-open several tiny groups because
+        # EOF was observed while the reader was still draining, which is
+        # catastrophic for cameras producing thousands of short TS files.
         self._open_from_segment(group, next_idx, 0.0, next_group)
         self._awaiting_first_frame = True
         self.position_changed.emit(self._position)
