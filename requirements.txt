@@ -1,0 +1,7 @@
+PySide6>=6.5.0
+numpy>=1.24.0
+onvif-zeep>=0.2.12
+zeep>=4.3.0
+requests>=2.32.0
+python-dateutil>=2.8.2
+imageio-ffmpeg>=0.5.1

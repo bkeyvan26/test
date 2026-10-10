@@ -1,0 +1,1610 @@
+logLevel: info
+logDestinations: [stdout]
+
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+
+api: yes
+apiAddress: :9997
+
+paths:
+  neghahbani/ch_01:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c14/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_01_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c14/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_02:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c9/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_02_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c9/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_03:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c15/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_03_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c15/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_04:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c1/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_04_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c1/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_05:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c12/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_05_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c12/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_06:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c10/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_06_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c10/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_07:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c6/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_07_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c6/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_08:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c3/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_08_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c3/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_09:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c8/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_09_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c8/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_10:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c2/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_10_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c2/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_11:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c16/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_11_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c16/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_12:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c7/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_12_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c7/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_13:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c13/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_13_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c13/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_14:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c5/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_14_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c5/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_15:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c4/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  neghahbani/ch_15_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c4/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  neghahbani/ch_16:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.201:554/unicast/c0/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_01:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c30/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_01_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c30/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_02:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c2/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_02_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c2/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_03:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c10/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_03_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c10/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_04:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c27/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_04_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c27/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_05:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c28/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_05_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c28/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_06:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c22/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_06_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c22/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_07:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c19/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_07_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c19/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_08:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c5/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_08_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c5/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_09:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c7/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_09_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c7/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_10:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c17/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_10_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c17/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_11:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c31/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_11_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c31/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_12:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c23/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_12_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c23/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_13:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c12/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_13_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c12/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_14:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c16/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_14_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c16/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_15:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c11/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_15_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c11/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_16:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c0/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_16_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c18/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_17:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c8/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_17_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c8/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_18:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c14/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_18_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c14/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_19:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c6/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_19_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c6/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_20:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c20/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_20_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c20/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_21:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c13/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_21_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c13/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_22:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c15/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_22_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c15/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_23:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c4/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_23_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c4/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_24:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c32/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_24_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c32/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_25:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c9/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_25_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c9/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_26:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c24/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_26_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c24/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_27:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c25/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_27_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c25/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_28:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c21/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_28_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c21/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_29:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c26/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_29_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c26/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_30:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c29/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_30_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c29/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  dakheli/ch_31:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c1/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  dakheli/ch_31_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.100:554/unicast/c1/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_01:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c11/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_01_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c11/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_02:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c29/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_02_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c29/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_03:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c8/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_03_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c8/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_04:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c22/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_04_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c22/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_05:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c10/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_05_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c10/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_06:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c19/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_06_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c19/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_07:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c31/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_07_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c31/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_08:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c4/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_08_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c4/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_09:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c18/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_09_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c18/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_10:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c21/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_10_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c21/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_11:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c32/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_11_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c32/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_12:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c25/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_12_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c25/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_13:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c7/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_13_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c7/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_14:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c15/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_14_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c15/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_15:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c30/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_15_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c30/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_16:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c0/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_16_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c27/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_17:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c9/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_17_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c9/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_18:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c20/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_18_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c20/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_19:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c5/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_19_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c5/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_20:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c28/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_20_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c28/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_21:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c16/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_21_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c16/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_22:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c14/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_22_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c14/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_23:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c1/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_23_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c1/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_24:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c2/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_24_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c2/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_25:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c24/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_25_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c24/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_26:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c17/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_26_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c17/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_27:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c6/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_27_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c6/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  mohit/ch_28:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c13/s0/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  mohit/ch_28_sub:
+    source: "rtsp://admin:He%40%23rasat%40%231405@192.168.1.200:554/unicast/c13/s1/live"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_01:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=1&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_01_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=1&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_02:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=2&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_02_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=2&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_03:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=3&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_03_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=3&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_04:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=4&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_04_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=4&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_05:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=5&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_05_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=5&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_06:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=6&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_06_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=6&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_07:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=7&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_07_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=7&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_08:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=8&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_08_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=8&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_09:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=9&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_09_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=9&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_10:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=10&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_10_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=10&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_11:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=11&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_11_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=11&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_12:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=12&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_12_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=12&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_13:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=13&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_13_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=13&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_14:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=14&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_14_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=14&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_15:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=15&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_15_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=15&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_16:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=16&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_16_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=16&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_17:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=17&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_17_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=17&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_18:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=18&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_18_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=18&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_19:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=19&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_19_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=19&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_20:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=20&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_20_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=20&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_21:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=21&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_21_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=21&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_22:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=22&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_22_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=22&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_23:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=23&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_23_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=23&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_24:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=24&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_24_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=24&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_25:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=25&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_25_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=25&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_26:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=26&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_26_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=26&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_27:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=27&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_27_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=27&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_28:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=28&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_28_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=28&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_29:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=29&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_29_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=29&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_30:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=30&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_30_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=30&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_31:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=31&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_31_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=31&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  khadamatshahr/ch_32:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=32&ids=1"
+    rtspTransport: tcp
+    sourceOnDemand: no
+    record: yes
+    recordPath: D:\recorde\k1Motion\recordings\continuous\%path\%Y-%m-%d\%H-%M-%S
+    recordFormat: mpegts
+    recordSegmentDuration: 5m
+    recordDeleteAfter: 168h
+
+  khadamatshahr/ch_32_sub:
+    source: "rtsp://admin:123456@192.168.226.10:554/mode=real&idc=32&ids=2"
+    rtspTransport: tcp
+    sourceOnDemand: no
